@@ -26,6 +26,7 @@ from numpy.typing import ArrayLike
 from pyproj import Transformer
 from rasterio.crs import CRS
 from rio_tiler.constants import WEB_MERCATOR_TMS, WGS84_CRS
+from rio_tiler.errors import TileOutsideBounds
 from rio_tiler.io import BaseReader, Reader
 from rio_tiler.models import BandStatistics, ImageData, Info, PointData
 from rio_tiler.types import BBox, Indexes
@@ -579,10 +580,16 @@ class CustomReader(BaseReader):
             self.mask = None
 
         # Open extra masks (e.g. custom uploaded masks)
-        self._extra_masks: list[tuple[Any, float]] = []
-        for mask_path, mask_min in self.input.get("extra_masks", []):
+        self._extra_masks: list[tuple[Any, float] | tuple[Any, float, str]] = []
+        for entry in self.input.get("extra_masks", []):
+            mask_path, threshold = entry[:2]
+            mode = entry[2] if len(entry) == 3 else "min"
+            if mode not in ("min", "max") or not np.isfinite(threshold):
+                raise ValueError(
+                    "Extra masks require a finite threshold and min/max mode"
+                )
             reader = self._ctx_stack.enter_context(Reader(mask_path))
-            self._extra_masks.append((reader, mask_min))
+            self._extra_masks.append((reader, threshold, mode))
 
         self.bounds = self.dataset.bounds
         self.crs = self.dataset.crs
@@ -656,8 +663,10 @@ class CustomReader(BaseReader):
                 (filled == 0) | (filled < self.input["mask_min_value"]),
             )
 
-        # Apply extra masks (custom uploaded masks — binary: > 0 = valid)
-        for extra_reader, extra_min in self._extra_masks:
+        # Legacy two-item entries retain their strict lower-bound comparison.
+        for entry in self._extra_masks:
+            extra_reader, threshold = entry[:2]
+            mode = entry[2] if len(entry) == 3 else "min"
             try:
                 extra_img = extra_reader.tile(
                     tile_x,
@@ -667,10 +676,15 @@ class CustomReader(BaseReader):
                     indexes=1,
                     **kwargs,
                 )
-                extra_filled = np.squeeze(extra_img.array.filled(0))
-                combined_mask = np.logical_or(combined_mask, extra_filled <= extra_min)
-            except Exception:
-                pass  # tile outside bounds — skip
+                extra = np.squeeze(extra_img.array)
+                valid = ~np.ma.getmaskarray(extra) & np.isfinite(extra.data)
+                keep = (
+                    extra.data <= threshold if mode == "max" else extra.data > threshold
+                )
+                combined_mask = np.logical_or(combined_mask, ~valid | ~keep)
+            except TileOutsideBounds:
+                # Outside requested mask support is not an unmasked observation.
+                combined_mask[...] = True
 
         if np.any(combined_mask != source_mask):
             img = ImageData(

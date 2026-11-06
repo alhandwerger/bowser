@@ -49,13 +49,14 @@ Bowser-lite still does not support GeoTIFF export.
 ## Existing masking differences
 
 The established export routines use these comparisons; this contribution
-records them without changing their numerical definitions:
+records them without changing existing lower-bound definitions. Direct-GeoTIFF
+upper-bound support is described in [the mask parity guide](cog-layer-masks.md):
 
 | Mask | GeoZarr | Direct GeoTIFF |
 | --- | --- | --- |
 | Primary | `> threshold` | `>= threshold` |
 | Layer, min | `>= threshold` | `> threshold` |
-| Layer, max | `<= threshold` | Unsupported; export returns 422 |
+| Layer, max | `<= threshold` | `<= threshold` |
 | Custom | `> 0` | `> 0.5` |
 
 Malformed/unknown layer masks, nonfinite thresholds, negative time indices,

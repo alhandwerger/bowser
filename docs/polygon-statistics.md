@@ -123,8 +123,8 @@ are applied only when sent in the request, and reported in `masks`,
 - `layer_masks`: a list of `{dataset, threshold, mode}` objects. Thresholds are
   in the mask layer's native units. `min` retains values at/above the threshold
   in GeoZarr and strictly above it in direct GeoTIFF mode, preserving existing
-  viewer/export comparisons. GeoZarr `max` retains values at/below the threshold;
-  direct-GeoTIFF `max` remains unsupported and returns 422.
+  viewer/export comparisons. `max` retains values at/below the threshold in
+  both modes, excluding invalid/nonfinite mask samples.
 - `primary_mask: true`: explicitly use the primary mask. GeoZarr additionally
   requires `mask_variable`; its default threshold is 0.1 and comparison is `>`.
   Direct GeoTIFF uses the configured primary-mask files, threshold and `>=`.
