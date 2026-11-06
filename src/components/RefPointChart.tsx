@@ -4,11 +4,12 @@ import { useAppContext } from '../context/AppContext';
 import { useApi } from '../hooks/useApi';
 import { useDraggableResizable } from '../hooks/useDraggableResizable';
 import { chartLayerFor } from '../utils/chartLayers';
+import { chartMaskOptions } from '../utils/chartMasks';
 
 interface BufferResult {
   labels: string[];
-  median: number[];
-  samples: number[][];
+  median: Array<{ x: string; y: number }>;
+  samples: Array<Array<{ x: string; y: number }>>;
   n_pixels: number;
 }
 
@@ -17,6 +18,7 @@ export default function RefPointChart() {
   const { fetchBufferTimeSeries } = useApi();
   const [bufferData, setBufferData] = useState<BufferResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const { panelRef, panelStyle, onDragMouseDown, resizeGrip } = useDraggableResizable({
     defaultWidth: 520,
@@ -40,9 +42,14 @@ export default function RefPointChart() {
     const [lat, lng] = state.refMarkerPosition;
 
     setLoading(true);
-    fetchBufferTimeSeries(lng, lat, chartDs, state.refBufferRadius, 20)
+    setBufferData(null);
+    setError(null);
+    fetchBufferTimeSeries(lng, lat, chartDs, state.refBufferRadius, 20, undefined, undefined, state.layerMasks, 0, chartMaskOptions({ dataMode: state.dataMode, datasetInfo: state.datasetInfo, customMaskPath: state.customMaskPath }, chartDs))
       .then(data => {
-        if (!ctrl.signal.aborted && data) setBufferData(data);
+        if (!ctrl.signal.aborted) {
+          if (data) setBufferData(data);
+          else setError('Could not load the reference-area summary. Check the selected masks.');
+        }
       })
       .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
 
@@ -53,6 +60,7 @@ export default function RefPointChart() {
     chartDs,
     state.refMarkerPosition,
     state.refBufferRadius,
+    state.layerMasks, state.customMaskPath, state.dataMode, state.datasetInfo, fetchBufferTimeSeries,
   ]);
 
   if (!state.refBufferEnabled || !state.showRefChart) return null;
@@ -63,15 +71,21 @@ export default function RefPointChart() {
       </div>
     );
   }
+  if (error) return <div ref={panelRef} className="profile-panel" style={panelStyle} role="alert">{error}</div>;
   if (!bufferData || bufferData.labels.length === 0) return null;
-
-  const { median, samples } = bufferData;
 
   // Use dataset info x_values as the authoritative label source — identical to
   // what the main time series chart uses, guaranteeing the axes match.
   const rawLabels: string[] =
     ((chartDs && state.datasetInfo[chartDs]?.x_values) || bufferData.labels).map(String);
   const n = rawLabels.length;
+  // The API omits masked dates. Align by label; never shift a later value into a gap.
+  const values = (series: Array<{ x: string; y: number }>): number[] => {
+    const byLabel = new Map(series.map(point => [String(point.x), point.y]));
+    return rawLabels.map(label => byLabel.get(label) ?? NaN);
+  };
+  const median = values(bufferData.median);
+  const samples = bufferData.samples.map(values);
 
   const toDisplay = (l: string) => {
     const parts = l.split('_');
