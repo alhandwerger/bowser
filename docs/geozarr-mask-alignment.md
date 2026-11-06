@@ -52,7 +52,8 @@ Lite still has no GeoTIFF export (501). Catalog resolution remains isolated.
 Polygon statistics already validate dynamic coordinate support and retain their
 existing endpoint contract, including its grid/CRS checks. This contribution
 does not introduce a general acquisition-to-ministack mapping, a connected-
-component policy, GeoTIFF point/radius masking, or improved browser error UI.
+component policy or improved browser error UI. GeoTIFF point/radius layer masks
+are addressed in [a separate follow-up](cog-chart-masks.md).
 The strict spatial check here concerns source coordinate grids within the
 selected dataset; it is not a new CRS repair/reprojection system.
 
