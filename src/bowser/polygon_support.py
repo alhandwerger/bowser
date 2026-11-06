@@ -73,10 +73,6 @@ class PolygonSupport:
                     "layer",
                 )
             else:
-                if mask.mode != "min":
-                    raise ValueError(
-                        "Direct GeoTIFF layer masks currently support only min"
-                    )
                 groups = target.raster_groups
                 if mask.dataset not in groups:
                     raise ValueError(f"Unknown mask layer: {mask.dataset}")
@@ -89,7 +85,11 @@ class PolygonSupport:
                         "Dynamic mask labels must match the selected layer exactly"
                     )
                 self._add_rasters(
-                    group.file_list, ">", mask.threshold, "layer", mask.dataset
+                    group.file_list,
+                    ">" if mask.mode == "min" else "<=",
+                    mask.threshold,
+                    "layer",
+                    mask.dataset,
                 )
         if request.custom_mask_path:
             self._add_rasters(

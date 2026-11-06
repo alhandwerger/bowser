@@ -168,15 +168,15 @@ def test_primary_and_custom_masks_preserve_existing_comparisons(inputs, mode):
     assert result["reference"] == "stored"
 
 
-def test_md_max_and_cog_rejection(inputs):
+@pytest.mark.parametrize("mode", ["md", "cog"])
+def test_inclusive_maximum_mask(inputs, mode):
     result = run(
         inputs,
-        "md",
+        mode,
         layer_masks=[{"dataset": "quality", "threshold": 0.5, "mode": "max"}],
     )
     assert result["common_pixels"] == 2
-    with pytest.raises(ValueError, match="only min"):
-        run(inputs, "cog", layer_masks=[{"dataset": "quality", "mode": "max"}])
+    assert result["masks"][0]["operator"] == "<="
 
 
 @pytest.mark.parametrize("mode", ["md", "cog"])

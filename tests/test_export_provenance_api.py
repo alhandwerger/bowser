@@ -48,7 +48,7 @@ def exports(tmp_path_factory):
         32631
     ).rio.to_raster(work / "custom.tif")
     (work / "broken.tif").write_text("not a raster")
-    script = r'''
+    script = r"""
 import inspect
 import io
 import json
@@ -137,7 +137,7 @@ for mode, state in (("md", md), ("cog", cog)):
             k.startswith("BOWSER_") for k in state.dataset.displacement.attrs
         )
 (work / "results.json").write_text(json.dumps(result))
-'''
+"""
     env = {k: v for k, v in os.environ.items() if not k.startswith("BOWSER_")}
     env["BOWSER_STACK_DATA_FILE"] = str(work / "cube.zarr")
     run = subprocess.run(
@@ -209,10 +209,14 @@ def test_unapplied_masks_cannot_be_claimed_in_successful_exports(exports, mode, 
     assert exports[f"{mode}_{case}"]["status"] == 422
 
 
-def test_preserve_md_max_and_primary_and_reject_unsupported_cog_max(exports):
-    assert exports["md_max"]["status"] == 200
-    assert not exports["md_max"]["valid"][0][2]
-    assert exports["cog_max"]["status"] == 422
+def test_inclusive_maximum_masks_and_preserve_primary_operator(exports):
+    for mode in ("md", "cog"):
+        case = exports[f"{mode}_max"]
+        assert case["status"] == 200
+        assert not case["valid"][0][2]
+        assert case["valid"][0][1]  # equality is retained, including source zero
+        info = json.loads(case["tags"]["BOWSER_EXPORT_PROVENANCE"])
+        assert info["masks"]["applied"][0]["operator"] == "<="
     case = exports["md_primary"]
     assert not case["valid"][0][1]  # primary is strict > .5, unlike MD layer min
     info = json.loads(case["tags"]["BOWSER_EXPORT_PROVENANCE"])
