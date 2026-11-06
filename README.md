@@ -102,6 +102,11 @@ Export values are not colorized, rewrapped, or converted between units.
 
 ## CLI Usage
 
+The selected layer's explanation, source units and producer-provided category
+meanings appear under the layer selector, including in split view. See
+[layer information](docs/layer-information.md) for metadata sources and how
+unknown or inconsistent conventions are reported.
+
 ```bash
 $ bowser --help
 Commands:
