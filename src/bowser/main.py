@@ -32,6 +32,7 @@ from starlette.templating import Jinja2Templates
 from starlette_cramjam.middleware import CompressionMiddleware
 
 from .config import settings
+from .mask_alignment import mask_operator, parse_layer_masks
 from .polygon import PolygonRequest, summarize_rasters, summarize_xarray
 from .state import BowserState, DatasetRegistry
 from .utils import (
@@ -716,9 +717,10 @@ def _apply_layer_masks_md(
 ) -> "xr.DataArray":
     """Apply a list of layer mask dicts to a DataArray (MD mode).
 
-    Each dict has keys: dataset (str), threshold (float), mode ('min'|'max').
+    Each dict has keys: dataset, native threshold and signed/absolute mode.
     threshold is an absolute value in the mask layer's data units.
     'min' keeps pixels >= threshold; 'max' keeps pixels <= threshold.
+    'abs_min' and 'abs_max' compare magnitudes with inclusive bounds.
     Pass the complete layer before slicing: dynamic masks follow every matching
     coordinate, static masks broadcast, and unrelated axes return HTTP 422.
 
@@ -739,7 +741,7 @@ def _apply_layer_masks_md(
             if var not in ds.data_vars:
                 raise ValueError(f"Unknown mask layer: {var}")
             aligned = align_mask(da, ds[var])
-            operator = "<=" if mask["mode"] == "max" else ">="
+            operator = mask_operator(mask["mode"])
             da = da.where(mask_condition(aligned, mask["threshold"], operator))
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2279,19 +2281,13 @@ def InputDependency(
 
     if layer_masks:
         try:
-            masks = json.loads(layer_masks)
-            if not isinstance(masks, list):
-                raise ValueError("layer_masks must be a JSON list")
+            masks = parse_layer_masks(layer_masks)
             for m in masks:
                 if not isinstance(m, dict):
                     raise ValueError("Each layer mask must be an object")
                 dataset = m.get("dataset")
                 threshold = float(m.get("threshold", 0.5))
                 mode = m.get("mode", "min")
-                if mode not in ("min", "max") or not np.isfinite(threshold):
-                    raise ValueError(
-                        "Mask requires min/max mode and a finite threshold"
-                    )
                 if not dataset or dataset not in state.raster_groups:
                     raise ValueError(f"Unknown mask layer: {dataset}")
                 fl = state.raster_groups[dataset].file_list
@@ -2447,8 +2443,11 @@ def _build_masked_cog_dataarray(
             m = m.rio.reproject_match(da_)
         if inclusive:
             return da_.where(np.isfinite(m) & (m != 0) & (m >= thr))
-        keep = m <= thr if mode == "max" else m > thr
-        return da_.where(np.isfinite(m) & keep)
+        from .mask_alignment import mask_condition
+
+        return da_.where(
+            mask_condition(m, thr, mask_operator(mode, inclusive_min=False))
+        )
 
     # Primary (recommended) mask, as the COG tile path applies it.
     mmv = rg.mask_min_value if mask_min_value is None else mask_min_value
@@ -2460,7 +2459,7 @@ def _build_masked_cog_dataarray(
     # Match the tile reader's strict lower and inclusive upper bounds.
     if layer_masks:
         try:
-            for m in json.loads(layer_masks):
+            for m in parse_layer_masks(layer_masks):
                 name = m.get("dataset")
                 if name not in target.raster_groups:
                     continue
@@ -2643,19 +2642,15 @@ def _export_mask_provenance(
                             "threshold": threshold,
                         }
                     )
-        parsed = json.loads(layer_masks) if layer_masks else []
-        if not isinstance(parsed, list):
-            raise ValueError("layer_masks must be a JSON list")
+        parsed = parse_layer_masks(layer_masks)
         for mask in parsed:
             if not isinstance(mask, dict):
                 raise ValueError("Each layer mask must be an object")
             mode = mask.get("mode", "min")
-            if mode not in ("min", "max"):
-                raise ValueError("Mask mode must be min or max")
             add(
                 mask.get("dataset"),
                 float(mask.get("threshold", 0.5)),
-                "<=" if mode == "max" else ">=" if target.mode == "md" else ">",
+                mask_operator(mode, inclusive_min=target.mode == "md"),
                 "layer",
             )
         if custom_mask_path:

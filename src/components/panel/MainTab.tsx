@@ -7,6 +7,8 @@ import LayerInfo from './LayerInfo';
 import { displayUnit } from '../../utils/units';
 import { baseColormap } from '../../utils/colormaps';
 import { LayerOptions, SectionHeader, Switch } from './controls';
+import { absoluteMask, maskControlRange, maskDefaultThreshold } from '../../utils/maskControls';
+import type { LayerMaskMode } from '../../types';
 
 /** A layer's percentiles, for the colour scale's range presets. */
 async function rangeOf(dataset: string): Promise<RangeStats | null> {
@@ -471,8 +473,7 @@ export default function MainTab() {
           <>
             {state.layerMasks.map(mask => {
               const range = datasetRanges[mask.dataset];
-              const rMin = range?.p2 ?? range?.min ?? 0;
-              const rMax = range?.p98 ?? range?.max ?? 1;
+              const [rMin, rMax] = maskControlRange(range, mask.mode);
               const step = rMax - rMin > 0 ? parseFloat(((rMax - rMin) / 200).toPrecision(2)) : 0.01;
               return (
                 <div key={mask.id} className="layer-mask-row">
@@ -482,25 +483,24 @@ export default function MainTab() {
                       onChange={e => {
                         const ds = e.target.value;
                         const newRange = datasetRanges[ds];
-                        const defaultThreshold = newRange
-                          ? (mask.mode === 'max' ? (newRange.p98 ?? newRange.max) : (newRange.p2 ?? newRange.min)) ?? 0.5
-                          : 0.5;
+                        const defaultThreshold = maskDefaultThreshold(newRange, mask.mode);
                         dispatch({ type: 'UPDATE_LAYER_MASK', payload: { id: mask.id, updates: { dataset: ds, threshold: defaultThreshold } } });
                       }}>
                       <LayerOptions names={Object.keys(state.datasetInfo)} />
                     </select>
-                    <select className="sidebar-select" style={{ width: 56, fontSize: '0.78em', padding: '2px 4px' }}
+                    <select className="sidebar-select" style={{ width: 96, fontSize: '0.78em', padding: '2px 4px' }}
+                      aria-label="Mask comparison" title="Absolute-value limits compare magnitude; measurements retain their signs."
                       value={mask.mode}
                       onChange={e => {
-                        const newMode = e.target.value as 'min' | 'max';
+                        const newMode = e.target.value as LayerMaskMode;
                         const r = datasetRanges[mask.dataset];
-                        const newThreshold = r
-                          ? (newMode === 'max' ? (r.p98 ?? r.max) : (r.p2 ?? r.min)) ?? mask.threshold
-                          : mask.threshold;
+                        const newThreshold = maskDefaultThreshold(r, newMode, mask.threshold);
                         dispatch({ type: 'UPDATE_LAYER_MASK', payload: { id: mask.id, updates: { mode: newMode, threshold: newThreshold } } });
                       }}>
                       <option value="min">≥</option>
                       <option value="max">≤</option>
+                      <option value="abs_min">|value| ≥</option>
+                      <option value="abs_max">|value| ≤</option>
                     </select>
                     <button className="hist-btn"
                       style={{ color: 'var(--sb-red)', padding: '2px 6px', flexShrink: 0 }}
@@ -513,10 +513,11 @@ export default function MainTab() {
                     </span>
                     <input type="number"
                       style={{ width: 72, fontSize: '0.75em', background: 'var(--sb-surface2)', border: '1px solid var(--sb-border)', borderRadius: 4, color: 'var(--sb-text)', padding: '1px 4px', textAlign: 'right' }}
+                      min={absoluteMask(mask.mode) ? 0 : undefined}
                       step={step} value={parseFloat(mask.threshold.toPrecision(4))}
                       onChange={e => {
                         const v = parseFloat(e.target.value);
-                        if (!isNaN(v)) dispatch({ type: 'UPDATE_LAYER_MASK', payload: { id: mask.id, updates: { threshold: v } } });
+                        if (Number.isFinite(v) && (!absoluteMask(mask.mode) || v >= 0)) dispatch({ type: 'UPDATE_LAYER_MASK', payload: { id: mask.id, updates: { threshold: v } } });
                       }} />
                   </div>
                   <input type="range" className="sidebar-range"

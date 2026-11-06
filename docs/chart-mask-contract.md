@@ -18,7 +18,9 @@ keep finite nonzero values `>= threshold`, matching the configured map mask's
 zero-is-invalid rule even when a threshold of zero is requested. Native polygon
 summaries and exports now honor that rule too. Uploaded masks keep finite values `> 0.5`
 for GeoTIFF data or `> 0` for GeoZarr, matching the existing mode-specific
-conventions. Layer-mask operators are unchanged. All requested masks combine
+conventions. Existing signed layer-mask operators are unchanged; see
+[absolute-value masks](absolute-value-masks.md) for the additional inclusive
+magnitude comparisons. All requested masks combine
 with AND and intrinsic source validity. A valid zero **measurement** remains
 valid; zero in an uploaded binary **mask** excludes that location.
 

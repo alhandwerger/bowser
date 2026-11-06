@@ -61,6 +61,7 @@ def apply_layer_masks(
     ``select`` picks from a mask layer the same pixels ``values`` came from.
     ``source`` is the complete, unsliced data variable used to validate axes
     before selecting corresponding mask dates or pixels.
+    ``abs_min``/``abs_max`` compare magnitudes inclusively.
     ``min`` keeps pixels >= threshold, ``max`` keeps pixels <= threshold, as
     ``bowser.main._apply_layer_masks_md``.
     """
@@ -71,7 +72,7 @@ def apply_layer_masks(
                 raise ValueError(f"Unknown mask layer: {var}")
             mask = mask_alignment.align_mask(source, ds[var])
             mask = select(_mask_frame(mask, time_idx))
-            operator = "<=" if m["mode"] == "max" else ">="
+            operator = mask_alignment.mask_operator(m["mode"])
             values = values.where(
                 mask_alignment.mask_condition(mask, m["threshold"], operator)
             )

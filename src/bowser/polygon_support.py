@@ -13,6 +13,7 @@ from pyproj import CRS, Transformer
 
 from . import polygon
 from .export import NoValidReferenceError, reference_offset
+from .mask_alignment import mask_operator, numpy_mask_condition
 from .polygon import NativeGrid, PolygonRequest, _linear, _values
 
 
@@ -68,7 +69,7 @@ class PolygonSupport:
             if target.mode == "md":
                 self._add_md(
                     mask.dataset,
-                    ">=" if mask.mode == "min" else "<=",
+                    mask_operator(mask.mode),
                     mask.threshold,
                     "layer",
                 )
@@ -86,7 +87,7 @@ class PolygonSupport:
                     )
                 self._add_rasters(
                     group.file_list,
-                    ">" if mask.mode == "min" else "<=",
+                    mask_operator(mask.mode, inclusive_min=False),
                     mask.threshold,
                     "layer",
                     mask.dataset,
@@ -205,10 +206,7 @@ class PolygonSupport:
         keep = np.isfinite(values)
         for load, operator, threshold in self.masks:
             mask = load(index, window, grid)
-            comparison = {">": np.greater, ">=": np.greater_equal, "<=": np.less_equal}[
-                operator
-            ]
-            keep &= np.isfinite(mask) & comparison(mask, threshold)
+            keep &= numpy_mask_condition(mask, threshold, operator)
         return np.where(keep, values, np.nan)
 
     def sample_references(self) -> list[float]:
