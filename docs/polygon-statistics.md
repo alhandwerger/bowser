@@ -2,9 +2,67 @@
 
 The full server provides `POST /polygon_timeseries` for read-only summaries of
 stored GeoZarr or single-band GeoTIFF values inside one WGS84 GeoJSON Polygon
-or MultiPolygon. The endpoint is the backend foundation for polygon charts;
-this contribution does not add or replace drawing tools, import controls, or
-chart UI. Upstream already supports drawing and importing geographic features.
+or MultiPolygon. The polygon chart controls use this endpoint with the existing
+drawing and importing tools; they do not replace those tools.
+
+## Plot an imported or drawn polygon
+
+1. In **Overlays**, import a geographic file or finish a polygon using **Draw**.
+   Points and lines do not appear in the polygon selector.
+2. In **Overlays > Layers > Polygon summary**, choose a polygon and pixel
+   selection policy, then select **Plot polygon**. No raster work starts merely
+   by importing a file. Hidden polygon overlays are available and labeled hidden.
+3. The chart shows median, mean (initially hidden), and 10th/90th percentiles
+   for the active scalar raster layer's **full stored record**. Click legend
+   entries to change visible curves. A static velocity layer gets a spatial
+   summary, not a newly fitted displacement history.
+
+**Same pixels at all dates** is the default and keeps a common source/quality
+footprint. **Available pixels per date** retains each date's usable pixels;
+changes in membership can change the apparent history. Counts and backend
+warnings identify limited or empty support. A missing reference epoch can have
+zero usable measurements even when common spatial support exists. P10–P90 is
+spatial spread, not a confidence interval or an uncertainty estimate. Component
+compatibility and reference stability are not established by this chart.
+
+An open chart follows the selected polygon's geometry, active layer, supported
+spatial reference, and masks. Reference buffer requests use the selected radius
+in meters; the server rejects unsupported grids or units. Direct GeoTIFF mode
+forwards its configured primary mask over the full record; explicit layer and
+custom masks are forwarded in both storage modes. GeoZarr uses the selected
+layer-mask controls rather than guessing a primary mask variable. Exact
+grid/axis checks below still apply; no ministack/date mapping is inferred.
+Displayed per-date maps and common-support curves can therefore have different
+footprints. Source reference pixels are sampled before optional display masks.
+
+Changing the map date, color scale, opacity or display units does not refetch
+the record. The chart does not impose the map's date-range filter, a new temporal
+zero, interpolation, or a new velocity fit. Null dates remain gaps. Non-date
+source labels are categorical. Metric/imperial display uses the viewer's
+existing unit helper; CSV and JSON retain native source units.
+
+Chart windows can be moved and resized. Their controls and legends do not add
+map points. Closing cancels pending requests. Changed requests clear old curves
+immediately, debounce updates, and ignore late obsolete responses even when
+transport cancellation fails. Unsupported data, masks or references show an
+error, without silently reverting to unmasked or stored-reference values.
+**Refresh polygon chart** explicitly repeats the current request.
+
+**CSV (native units)** saves labels, layer, units, counts, mean, median and
+percentiles. Missing values remain blank and zeros stay zero. **Values and
+details (JSON)** retains the full server result, polygon, support, reference
+offsets/coordinates, masks, warnings and catalog identity. A custom mask is
+identified by basename rather than its server directory; relink that file
+manually before replaying an API request. Text cells are escaped for CSV use.
+
+KML/GeoJSON altitude coordinates are omitted from the 2D selection request;
+the imported feature, holes and polygon parts remain unchanged. Unique feature
+IDs retain selection through edits/reordering. Anonymous or duplicate-ID
+features use object identity, never array position; replacing such a feature
+may require selecting it again. A deleted selection never switches silently to
+another polygon. This adds no new import format or multi-region batch API.
+
+## API example
 
 ```python
 import requests
@@ -111,7 +169,7 @@ Connected-component screening remains unimplemented and explicitly reported
 as unverified. Component IDs are not assumed comparable across dates or pairs.
 A selected reference is not proof of stable ground or component compatibility;
 spatial spread is not measurement uncertainty. Unknown request fields remain
-errors. This contribution supplies backend support; chart wiring is separate.
+errors. The chart forwards only explicitly selected adjustments.
 
 The full server supports explicit, regular rectilinear GeoZarr x/y coordinate
 grids and at most one non-spatial axis. Single-band GeoTIFF groups must share the exact grid, CRS and
@@ -148,3 +206,11 @@ nodata and missing-value sentinels, holes, multiple polygon parts, reversed and
 transposed axes, clipping, absent data, mixed units/grids, unsupported fields,
 lazy GeoZarr chunk reads, windowed GeoTIFF reads, catalog isolation, actual
 HTTP responses and lite dependency isolation. They require no real data.
+
+Frontend tests cover imported/drawn selection (including altitude and holes),
+reference/mask/support updates, invalid/deleted selections, zeros and nulls,
+catalog routing, cancellation and stale responses, legend state, portal event
+isolation, and native-unit CSV/JSON exports. Component tests use jsdom with the
+Chart.js canvas renderer mocked; they do not establish graphical rendering or
+real map-engine acceptance in a browser. Real-data and browser acceptance
+remain separate from synthetic API/DOM regression results.
