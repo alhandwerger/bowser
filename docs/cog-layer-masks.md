@@ -34,6 +34,8 @@ summaries**. It does not repair the existing point/radius chart mask handling,
 temporal index clamping, map error feedback, or change GeoZarr alignment rules.
 Those require separate audits. A configured static mask uses its single file;
 dynamic tile/export masks still follow the existing configured index selection.
+GeoZarr date alignment is addressed separately in
+[the alignment guide](geozarr-mask-alignment.md).
 Polygon summaries retain stricter exact-grid and matching-axis requirements.
 No acquisition/ministack mapping is inferred here.
 
