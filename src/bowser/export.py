@@ -10,6 +10,10 @@ from pyproj import CRS, Transformer
 from rasterio.transform import rowcol
 
 
+class NoValidReferenceError(ValueError):
+    """Indicate absent source support at an otherwise valid reference location."""
+
+
 def reference_offset(
     source: xr.DataArray,
     lon: float,
@@ -107,7 +111,7 @@ def reference_offset(
         valid &= values != nodata
     values = values[valid]
     if values.size == 0:
-        raise ValueError(
+        raise NoValidReferenceError(
             "Reference contains no valid source pixels; select another reference"
         )
     offset = float(np.median(values))
