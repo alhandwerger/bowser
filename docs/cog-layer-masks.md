@@ -30,7 +30,8 @@ failed requests rather than returning apparently unmasked observations.
 ## Scope and limitations
 
 This contribution covers direct-GeoTIFF **map tiles, export and native polygon
-summaries**. It does not repair the existing point/radius chart mask handling,
+summaries**. [Point/radius layer-mask support](cog-chart-masks.md) is a separate
+follow-up. This contribution does not repair
 temporal index clamping, map error feedback, or change GeoZarr alignment rules.
 Those require separate audits. A configured static mask uses its single file;
 dynamic tile/export masks still follow the existing configured index selection.

@@ -746,6 +746,41 @@ def _apply_layer_masks_md(
     return da
 
 
+def _get_cog_samples(
+    dataset_name: str,
+    lon: float,
+    lat: float,
+    layer_masks: list[dict],
+    *,
+    radius: float | None = None,
+    time_idx: int | None = None,
+) -> np.ndarray:
+    """Read bounded, native chart samples with aligned GeoTIFF layer masks."""
+    from .cog_sampling import CogSampler, OutsideRasterError
+
+    if dataset_name not in state.raster_groups:
+        raise HTTPException(
+            status_code=404, detail=f"Dataset {dataset_name} not found"
+        )
+    try:
+        sampler = CogSampler(
+            state.raster_groups[dataset_name], state.raster_groups, layer_masks
+        )
+        return (
+            sampler.point(lon, lat, time_idx)
+            if radius is None
+            else sampler.buffer(lon, lat, radius)
+        )
+    except OutsideRasterError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(
+            status_code=422, detail="Could not read GeoTIFF chart data or mask"
+        ) from exc
+
+
 async def _get_ref_median(
     dataset_name: str,
     lon: float,
@@ -755,11 +790,18 @@ async def _get_ref_median(
 ) -> np.ndarray:
     """Return reference time series.
 
-    Buffer median when ``buffer_m > 0`` (MD mode), else a single pixel.
+    Buffer median when ``buffer_m > 0``, else a single pixel.
     """
     layer_masks = layer_masks or []
-    if buffer_m <= 0 or state.mode != "md":
+    if buffer_m <= 0:
         return await _get_point_values(dataset_name, lon, lat, layer_masks)
+    if state.mode == "cog":
+        import warnings as _w
+
+        flat = _get_cog_samples(dataset_name, lon, lat, layer_masks, radius=buffer_m)
+        with _w.catch_warnings():
+            _w.simplefilter("ignore", RuntimeWarning)
+            return np.nanmedian(flat, axis=1)
 
     if dataset_name not in state.dataset.data_vars:
         raise HTTPException(
@@ -799,7 +841,7 @@ async def _get_point_values(
     layer_masks: list[dict] | None = None,
     time_idx: int | None = None,
 ) -> np.ndarray:
-    """Get point values for a dataset at lon/lat, with optional MD-mode masking.
+    """Get point values at lon/lat, with explicit layer masks in either mode.
 
     When ``time_idx`` is given, only that single time step is read — a hover
     that shows one value then costs one chunk/file fetch instead of pulling the
@@ -822,6 +864,10 @@ async def _get_point_values(
         point_data = da.sel(x=x, y=y, method="nearest")
         return np.atleast_1d(point_data.values)
     else:  # cog mode
+        if layer_masks:
+            return _get_cog_samples(
+                dataset_name, lon, lat, layer_masks, time_idx=time_idx
+            )
         if dataset_name not in state.raster_groups:
             raise HTTPException(
                 status_code=404, detail=f"Dataset {dataset_name} not found"
@@ -1431,43 +1477,13 @@ async def buffer_timeseries(
         rg = state.raster_groups[dataset_name]
         x_values = rg.x_values
 
-        reader0 = rg._reader.readers[0]
-        tr_from = reader0._transformer_from_lonlat
-        cx, cy = tr_from.transform(lon, lat)
-        tf = reader0.transform
-        res_x = abs(tf.a)
-        res_y = abs(tf.e)
-
-        # Pixel radius
-        pr_x = int(np.ceil(buffer_m / res_x))
-        pr_y = int(np.ceil(buffer_m / res_y))
-        row_c, col_c = reader0._lonlat_to_rowcol(lon, lat)
-        r0, r1 = max(0, row_c - pr_y), min(reader0.shape[0], row_c + pr_y + 1)
-        c0, c1 = max(0, col_c - pr_x), min(reader0.shape[1], col_c + pr_x + 1)
-
-        rows, cols = np.meshgrid(np.arange(r0, r1), np.arange(c0, c1), indexing="ij")
-        xs = tf.c + (cols + 0.5) * tf.a
-        ys = tf.f + (rows + 0.5) * tf.e
-        dist = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2)
-        in_circle = (dist <= buffer_m).ravel()
-
-        # Read full stack for window — shape (T, ny, nx) via slicing
-        T = len(rg.file_list)
-        ny, nx = r1 - r0, c1 - c0
-        flat_full = np.full((T, ny * nx), np.nan)
-        for t_idx in range(T):
-            with rasterio.open(rg.file_list[t_idx]) as src:
-                nodata = src.nodata
-                patch = src.read(
-                    1, window=rasterio.windows.Window(c0, r0, nx, ny)
-                ).astype(float)
-                if nodata is not None:
-                    patch[patch == nodata] = np.nan
-                flat_full[t_idx] = patch.ravel()
-        flat = flat_full[:, in_circle]
-
+        flat = _get_cog_samples(
+            dataset_name, lon, lat, layer_masks, radius=buffer_m
+        )
         if ref_lon is not None and ref_lat is not None:
-            ref_vals = await _get_point_values(dataset_name, ref_lon, ref_lat)
+            ref_vals = await _get_ref_median(
+                dataset_name, ref_lon, ref_lat, ref_buffer_m, layer_masks
+            )
             flat = flat - ref_vals[:, np.newaxis]
 
     # Drop columns (pixels) that are all NaN
