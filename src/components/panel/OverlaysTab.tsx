@@ -8,6 +8,7 @@ import { DATA_ROW, DRAWINGS_ID, overlayRows, reorderOverlays } from '../../map/o
 import { downloadLayer } from '../../map/exportLayer';
 import { browserHasWebGL2, chooseMap } from '../../map/mapChoice';
 import OverlayRow from './OverlayRow';
+import PolygonAnalysis from './PolygonAnalysis';
 import { SectionHeader, Switch } from './controls';
 
 type View = 'layers' | 'services' | 'draw';
@@ -108,6 +109,7 @@ function LayersView() {
           ? <div className="row-label" style={{ textAlign: 'center', fontSize: '0.72em' }}>Files and services you add appear here.</div>
           : <div className="row-label" style={{ textAlign: 'center', fontSize: '0.72em' }}>Drag ⋮⋮ to reorder, above or below the data layer.</div>}
       </div>
+      <PolygonAnalysis />
     </>
   );
 }
