@@ -55,6 +55,24 @@ async function exerciseEveryCall() {
 }
 
 describe('useApi request contract', () => {
+  it('forwards primary/uploaded masks to point and radius charts without local paths in query strings', async () => {
+    window.history.replaceState({}, '', '/?dataset=cube-a');
+    const { result } = renderHook(() => useApi());
+    const options = { primary_mask: true as const, mask_min_value: 0.6, custom_mask_path: '/tmp/upload.tif' };
+    await result.current.fetchMultiPointTimeSeries(POINTS, 'displacement', undefined, undefined, false, MASK, 0, options);
+    await result.current.fetchBufferTimeSeries(LON, LAT, 'displacement', 30, 0, undefined, undefined, MASK, 0, options);
+    for (const call of calls) {
+      expect(call.body).toMatchObject(options);
+      expect(call.url).toContain('dataset=cube-a');
+      expect(call.url).not.toContain('upload.tif');
+    }
+  });
+
+  it('does not return a server error object as successful point-chart data', async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ detail: 'Mask grid mismatch' }), { status: 422 }));
+    const { result } = renderHook(() => useApi());
+    expect(await result.current.fetchMultiPointTimeSeries(POINTS, 'displacement')).toBeUndefined();
+  });
   it('single-dataset mode (no ?dataset=)', async () => {
     expect(await exerciseEveryCall()).toMatchSnapshot();
   });

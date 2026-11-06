@@ -187,7 +187,13 @@ class PolygonSupport:
                 if source.count != 1:
                     raise ValueError("Masks must be single-band scalar rasters")
                 _linear(source.dtypes[0], None)
-                return _values(source.read(1, window=window, masked=True))
+                values = _values(source.read(1, window=window, masked=True))
+                # Match configured COG map masks even if the threshold is zero.
+                return (
+                    np.where(values == 0, np.nan, values)
+                    if kind == "primary"
+                    else values
+                )
 
         self.masks.append((load, operator, threshold))
         self.records.append(record)

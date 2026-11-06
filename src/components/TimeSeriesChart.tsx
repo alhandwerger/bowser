@@ -16,6 +16,7 @@ import { seriesStyle } from '../map/seriesStyle';
 import { describeFit, fitSeries, modelCurve, modelLabel, rSquared } from '../map/fitSettings';
 import type { FitResult } from '../map/fit';
 import { displayUnit } from '../utils/units';
+import { chartMaskOptions } from '../utils/chartMasks';
 
 // Chart.js plugin to wire legend-click visibility to all related datasets (raw, trend,
 // residual, samples, median) that share the same base label.
@@ -98,6 +99,9 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
   const { fetchMultiPointTimeSeries, fetchBufferTimeSeries } = useApi();
   const themeVersion = useThemeVersion();
   // chartData keyed by dataset name
+  const pointRequest = useRef(0);
+  const [chartError, setChartError] = useState<string | null>(null);
+  const [bufferError, setBufferError] = useState<string | null>(null);
   const [chartDataMap, setChartDataMap] = useState<{ [ds: string]: MultiPointTimeSeriesData }>({});
   const [bufferData, setBufferData] = useState<{ [key: string]: BufferResult }>({});
   const [isLoading, setIsLoading] = useState(false);
@@ -125,6 +129,8 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
     : (followedDs ? [followedDs] : []);
 
   const updateChart = useCallback(async () => {
+    const request = ++pointRequest.current;
+    setChartError(null);
     if (!state.showChart || !state.currentDataset || state.timeSeriesPoints.length === 0) {
       setChartDataMap({});
       return;
@@ -161,7 +167,9 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
             apiPoints, dsName, refLon, refLat, false,
             state.layerMasks,
             state.refEnabled && state.refBufferEnabled ? state.refBufferRadius : 0,
+            chartMaskOptions({ dataMode: state.dataMode, datasetInfo: state.datasetInfo, customMaskPath: state.customMaskPath }, dsName),
           );
+          if (!tsData) throw new Error(`Could not load ${dsName}. Check the selected masks and reference settings.`);
           return { dsName, tsData };
         })
       );
@@ -169,11 +177,14 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
       results.forEach(({ dsName, tsData }) => {
         if (tsData) newMap[dsName] = tsData;
       });
-      setChartDataMap(newMap);
+      if (request === pointRequest.current) setChartDataMap(newMap);
     } catch (error) {
-      console.error('Error updating chart:', error);
+      if (request === pointRequest.current) {
+        setChartDataMap({});
+        setChartError(error instanceof Error ? error.message : 'Chart request failed.');
+      }
     } finally {
-      setIsLoading(false);
+      if (request === pointRequest.current) setIsLoading(false);
     }
   }, [
     state.showChart,
@@ -184,13 +195,18 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
     state.refEnabled,
     state.datasetInfo,
     state.layerMasks,
+    state.customMaskPath, state.dataMode, state.refBufferEnabled, state.refBufferRadius,
     fetchMultiPointTimeSeries,
   ]);
 
-  useEffect(() => { updateChart(); }, [updateChart]);
+  const invalidatePointRequests = useCallback(() => { pointRequest.current++; }, []);
+  useEffect(() => { updateChart(); return invalidatePointRequests; }, [updateChart, invalidatePointRequests]);
 
   // Fetch buffer data for each visible point × each active dataset
   useEffect(() => {
+    let cancelled = false;
+    setBufferData({});
+    setBufferError(null);
     if (!state.bufferEnabled || !state.showChart || !state.currentDataset) {
       setBufferData({});
       return;
@@ -215,15 +231,20 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
             refLon, refLat,
             state.layerMasks,
             state.refEnabled && state.refBufferEnabled ? state.refBufferRadius : 0,
+            chartMaskOptions({ dataMode: state.dataMode, datasetInfo: state.datasetInfo, customMaskPath: state.customMaskPath }, dsName),
           );
+          if (!result) throw new Error(`Could not load the ${dsName} radius summary. Check the selected masks and reference settings.`);
           return { key: `${dsName}::${p.id}`, result };
         });
       })
     ).then(results => {
       const newData: { [key: string]: any } = {};
       results.forEach(({ key, result }) => { if (result) newData[key] = result; });
-      setBufferData(newData);
+      if (!cancelled) setBufferData(newData);
+    }).catch(error => {
+      if (!cancelled) setBufferError(error instanceof Error ? error.message : 'Radius summary request failed.');
     });
+    return () => { cancelled = true; };
   }, [
     state.bufferEnabled,
     state.showChart,
@@ -235,6 +256,7 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
     state.refBufferEnabled,
     state.refBufferRadius,
     state.layerMasks,
+    state.customMaskPath, state.dataMode, state.datasetInfo,
     JSON.stringify(state.timeSeriesPoints.map(p => ({ id: p.id, position: p.position, visible: p.visible }))),
     state.refMarkerPosition,
     fetchBufferTimeSeries,
@@ -640,6 +662,12 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
     );
   }
 
+  if (chartError) return (
+    <div id="chart-container" ref={panelRef} style={panelStyle}>
+      {headerContent}<div className="chart-placeholder" role="alert">{chartError}</div>{resizeGrip}
+    </div>
+  );
+
   // A masked point comes back as a dataset with no points: that is no data too.
   if (!Object.values(chartDataMap).some(d => d.datasets.some(series => series.data.length > 0))) {
     return (
@@ -648,15 +676,15 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
         <div className="chart-placeholder">
           {activeDatasetsForChart.length === 0
             ? <p>No layer here has a time dimension.</p>
-            : state.layerMasks.length > 0
+            : state.layerMasks.length > 0 || !!state.customMaskPath || activeDatasetsForChart.some(ds => chartMaskOptions(state, ds).primary_mask)
               ? (
                 <>
                   <p>Masking hides every date at the selected points.</p>
-                  <p><small>Masks on: {state.layerMasks.map(m => m.dataset).join(', ')} (Main › Masking).</small></p>
-                  <button type="button" className="hist-btn" style={{ flex: 'none', marginTop: 6 }}
+                  <p><small>Check layer, configured and uploaded masks in Main › Masking.</small></p>
+                  {state.layerMasks.length > 0 && <button type="button" className="hist-btn" style={{ flex: 'none', marginTop: 6 }}
                     onClick={() => state.layerMasks.forEach(m => dispatch({ type: 'REMOVE_LAYER_MASK', payload: m.id }))}>
-                    Remove the masks
-                  </button>
+                    Remove layer masks
+                  </button>}
                 </>
               )
               : <p>No data for selected points.</p>
@@ -806,6 +834,7 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
   return (
     <div id="chart-container" ref={panelRef} style={panelStyle}>
       {headerContent}
+      {bufferError && <div role="alert">{bufferError}</div>}
 
       {/* Marker size + date range sliders */}
       <div className="chart-sliders">

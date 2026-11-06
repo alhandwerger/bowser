@@ -1,3 +1,4 @@
+import { chartMaskOptions } from '../../utils/chartMasks';
 import { useEffect, useState } from 'react';
 import { Line } from 'react-chartjs-2';
 import { Chart as ChartJS, Legend, LinearScale, LineElement, PointElement, TimeScale, Tooltip } from 'chart.js';
@@ -141,6 +142,7 @@ export default function GnssTab() {
               [{ id: selected.id, lat: selected.lat, lon: selected.lon, color: '#5bc0be', name: selected.id }],
               ds, ref?.[1], ref?.[0], false, state.layerMasks,
               state.refEnabled && state.refBufferEnabled ? state.refBufferRadius : 0,
+              chartMaskOptions(state, ds),
             );
             return r?.datasets[0]?.data ?? null;
           }}
