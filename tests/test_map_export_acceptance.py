@@ -149,6 +149,23 @@ def _exercise(work: Path) -> None:
                         assert src.shape == (size, size)
                         assert src.tags()["units"] == "meters"
                         assert float(src.tags()["BOWSER_REFERENCE_VALUE"]) == offset
+                        provenance = json.loads(src.tags()["BOWSER_EXPORT_PROVENANCE"])
+                        reference = provenance["reference"]
+                        assert reference["mode"] == "interactive"
+                        assert float(reference["value"]) == offset
+                        assert float(reference["longitude"]) == lon
+                        assert float(reference["latitude"]) == lat
+                        assert reference["utm"]["crs"].startswith("EPSG:326")
+                        utm = reference["utm"]
+                        back_lon, back_lat = Transformer.from_crs(
+                            utm["crs"], 4326, always_xy=True
+                        ).transform(utm["easting_meters"], utm["northing_meters"])
+                        np.testing.assert_allclose([back_lon, back_lat], [lon, lat], atol=1e-9)
+                        assert reference["method"] == (
+                            "circular_median" if buffered
+                            else "nearest_pixel" if mode == "md" else "containing_pixel"
+                        )
+                        assert bool(provenance["masks"]["applied"]) == masked
                 expected_valid = np.isfinite(values) & (
                     (mask > 0.5) if masked else True
                 )

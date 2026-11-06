@@ -14,7 +14,7 @@ beforeEach(() => {
     refEnabled: true, refMarkerPosition: [34, -118],
     refBufferEnabled: false, refBufferRadius: 50,
   } as unknown as AppState;
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob() }));
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(), headers: new Headers() }));
   vi.stubGlobal('alert', vi.fn());
   URL.createObjectURL = vi.fn().mockReturnValue('blob:test');
   URL.revokeObjectURL = vi.fn();
