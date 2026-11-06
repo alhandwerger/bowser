@@ -33,6 +33,7 @@ from rio_tiler.types import BBox, Indexes
 from tqdm.contrib.concurrent import thread_map
 
 from ._dates import get_dates
+from .mask_alignment import mask_operator, numpy_mask_condition, validate_mask_threshold
 
 
 def _patch_rasterio_float16() -> None:
@@ -256,7 +257,10 @@ class RasterReader(DatasetReader):
             _crs = CRS.from_wkt(ds.GetProjection()) if ds.GetProjection() else None
             raster_band = ds.GetRasterBand(band)
             _nodata = raster_band.GetNoDataValue()
-            layer_attrs = {**(ds.GetMetadata() or {}), **(raster_band.GetMetadata() or {})}
+            layer_attrs = {
+                **(ds.GetMetadata() or {}),
+                **(raster_band.GetMetadata() or {}),
+            }
             if raster_band.GetUnitType():
                 layer_attrs["units"] = raster_band.GetUnitType()
             if raster_band.GetDescription():
@@ -584,10 +588,7 @@ class CustomReader(BaseReader):
         for entry in self.input.get("extra_masks", []):
             mask_path, threshold = entry[:2]
             mode = entry[2] if len(entry) == 3 else "min"
-            if mode not in ("min", "max") or not np.isfinite(threshold):
-                raise ValueError(
-                    "Extra masks require a finite threshold and min/max mode"
-                )
+            validate_mask_threshold(mode, threshold)
             reader = self._ctx_stack.enter_context(Reader(mask_path))
             self._extra_masks.append((reader, threshold, mode))
 
@@ -678,8 +679,8 @@ class CustomReader(BaseReader):
                 )
                 extra = np.squeeze(extra_img.array)
                 valid = ~np.ma.getmaskarray(extra) & np.isfinite(extra.data)
-                keep = (
-                    extra.data <= threshold if mode == "max" else extra.data > threshold
+                keep = numpy_mask_condition(
+                    extra, threshold, mask_operator(mode, inclusive_min=False)
                 )
                 combined_mask = np.logical_or(combined_mask, ~valid | ~keep)
             except TileOutsideBounds:

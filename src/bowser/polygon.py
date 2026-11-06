@@ -17,6 +17,8 @@ from rasterio.windows import Window
 from rasterio.windows import transform as window_transform
 from shapely.geometry import shape
 
+from .mask_alignment import validate_mask_threshold
+
 MAX_VERTICES = 10_000
 MAX_WINDOW_PIXELS = 2_000_000
 MAX_PIXEL_EPOCHS = 50_000_000
@@ -30,7 +32,12 @@ class PolygonMask(BaseModel):
     model_config = ConfigDict(extra="forbid")
     dataset: str = Field(min_length=1)
     threshold: float = Field(default=0.5, allow_inf_nan=False)
-    mode: Literal["min", "max"] = "min"
+    mode: Literal["min", "max", "abs_min", "abs_max"] = "min"
+
+    @model_validator(mode="after")
+    def _threshold(self) -> "PolygonMask":
+        validate_mask_threshold(self.mode, self.threshold)
+        return self
 
 
 class PolygonRequest(BaseModel):

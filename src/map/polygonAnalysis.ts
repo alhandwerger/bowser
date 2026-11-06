@@ -1,5 +1,5 @@
 /** Native polygon summaries: feature identity, request settings, and export data. */
-import type { AppState, Overlay } from '../types';
+import type { AppState, LayerMaskMode, Overlay } from '../types';
 import { chartMaskOptions } from '../utils/chartMasks';
 
 export interface PolygonGeometry { type: 'Polygon' | 'MultiPolygon'; coordinates: unknown[] }
@@ -10,7 +10,7 @@ export interface PolygonBody {
   geometry: PolygonGeometry;
   support: PolygonSupport;
   percentiles: number[];
-  layer_masks: Array<{ dataset: string; threshold: number; mode: 'min' | 'max' }>;
+  layer_masks: Array<{ dataset: string; threshold: number; mode: LayerMaskMode }>;
   custom_mask_path?: string;
   primary_mask?: true;
   mask_min_value?: number;
