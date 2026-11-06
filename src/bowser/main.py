@@ -1208,11 +1208,11 @@ def polygon_timeseries(
     body: PolygonRequest,
     target: BowserState = Depends(TargetState),
 ):
-    """Summarize stored native pixels inside a WGS84 polygon.
+    """Summarize native pixels with explicit masks and spatial references.
 
-    This first endpoint provides bounded stored-value summaries, independent
-    of map zoom. Interactive references, optional quality masks and component
-    screening are not implicitly applied. Unknown request fields are rejected.
+    All adjustments are opt-in. Mask grids and dynamic axes must align;
+    reference offsets use source support before optional display masks.
+    Connected-component compatibility is never inferred.
     """
     available = (
         target.dataset.data_vars
@@ -1222,6 +1222,8 @@ def polygon_timeseries(
     if available is None or body.variable not in available:
         raise HTTPException(status_code=404, detail=f"Unknown layer: {body.variable}")
     try:
+        from .polygon_support import PolygonSupport  # noqa: PLC0415
+
         if target.mode == "md":
             source = target.dataset[body.variable]
             extra = [d for d in source.dims if d not in ("x", "y")]
@@ -1229,9 +1231,40 @@ def polygon_timeseries(
                 raise ValueError("Source supports at most one non-spatial axis")
             dim = extra[0] if extra else None
             labels = _dim_labels(source, dim) if dim else ["Stored layer"]
-            result = summarize_xarray(source, body, labels)
+            support = PolygonSupport(
+                target,
+                body,
+                labels,
+                reference_allowed=(
+                    settings.BOWSER_USE_SPATIAL_REFERENCE_DISP
+                    and _uses_spatial_reference(body.variable, source)
+                ),
+            )
+            result = summarize_xarray(
+                source,
+                body,
+                labels,
+                adjust=support.apply if support.masks else None,
+                reference=support.sample_references
+                if body.ref_lon is not None
+                else None,
+            )
         else:
-            result = summarize_rasters(target.raster_groups[body.variable], body)
+            group = target.raster_groups[body.variable]
+            support = PolygonSupport(
+                target,
+                body,
+                list(map(str, group.x_values)),
+                reference_allowed=group.uses_spatial_ref and group.algorithm == "shift",
+            )
+            result = summarize_rasters(
+                group,
+                body,
+                adjust=support.apply if support.masks else None,
+                reference=support.sample_references
+                if body.ref_lon is not None
+                else None,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except (OSError, rasterio.errors.RasterioError) as exc:
@@ -1239,7 +1272,7 @@ def polygon_timeseries(
         raise HTTPException(
             status_code=422, detail="Could not read polygon-analysis source"
         ) from exc
-    return JSONResponse(result)
+    return JSONResponse(support.finish(result))
 
 
 @app.get(
