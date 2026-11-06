@@ -380,8 +380,17 @@ def multi_point(
     calculate_trends: bool = Body(False),
     layer_masks: list[dict] = Body([]),
     ref_buffer_m: float = Body(0.0),
+    primary_mask: bool = Body(False),
+    mask_min_value: Optional[float] = Body(None),
+    custom_mask_path: Optional[str] = Body(None),
 ):
     """Series (and optional trends) for several points, re-referenced and masked."""
+    if primary_mask or mask_min_value is not None or custom_mask_path is not None:
+        raise HTTPException(
+            501,
+            "Configured/uploaded GeoTIFF chart masks require the full server; "
+            "lite supports GeoZarr layer_masks",
+        )
     cube = resolve()
     x_values = meta.labels_for(sampling.require_var(cube.dataset, dataset_name))
     ref = None
@@ -526,8 +535,17 @@ def buffer_timeseries(
     ref_lat: Optional[float] = Body(None),
     layer_masks: list[dict] = Body([]),
     ref_buffer_m: float = Body(0.0),
+    primary_mask: bool = Body(False),
+    mask_min_value: Optional[float] = Body(None),
+    custom_mask_path: Optional[str] = Body(None),
 ):
     """Median and a few random pixel series within a circle around a point."""
+    if primary_mask or mask_min_value is not None or custom_mask_path is not None:
+        raise HTTPException(
+            501,
+            "Configured/uploaded GeoTIFF chart masks require the full server; "
+            "lite supports GeoZarr layer_masks",
+        )
     cube = resolve()
     x_values = meta.labels_for(sampling.require_var(cube.dataset, dataset_name))
     found = sampling.buffer_window(cube, dataset_name, lon, lat, buffer_m, layer_masks)

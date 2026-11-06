@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import { MultiPointTimeSeriesData, LayerMask } from '../types';
+import type { ChartMaskOptions } from '../utils/chartMasks';
 
 /**
  * Read `?dataset=<id>` from the current URL.
@@ -99,6 +100,7 @@ export function useApi() {
     calculateTrends: boolean = false,
     layerMasks: LayerMask[] = [],
     refBufferM: number = 0,
+    maskOptions: ChartMaskOptions = {},
   ): Promise<MultiPointTimeSeriesData | undefined> => {
     const payload = {
       points,
@@ -108,6 +110,7 @@ export function useApi() {
       calculate_trends: calculateTrends,
       layer_masks: layerMasks.map(m => ({ dataset: m.dataset, threshold: m.threshold, mode: m.mode })),
       ref_buffer_m: refBufferM,
+      ...maskOptions,
     };
 
     try {
@@ -120,6 +123,7 @@ export function useApi() {
         },
         body: JSON.stringify(payload),
       });
+      if (!response.ok) return undefined;
       return await response.json();
     } catch (error) {
       console.error('Error fetching multi-point time series:', error);
@@ -178,6 +182,7 @@ export function useApi() {
     refLat?: number,
     layerMasks: LayerMask[] = [],
     refBufferM: number = 0,
+    maskOptions: ChartMaskOptions = {},
   ) => {
     try {
       const id = currentDatasetId();
@@ -194,6 +199,7 @@ export function useApi() {
           ref_lat: refLat ?? null,
           layer_masks: layerMasks.map(m => ({ dataset: m.dataset, threshold: m.threshold, mode: m.mode })),
           ref_buffer_m: refBufferM,
+          ...maskOptions,
         }),
       });
       if (!response.ok) return undefined;

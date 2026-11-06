@@ -1,5 +1,6 @@
 /** Native polygon summaries: feature identity, request settings, and export data. */
 import type { AppState, Overlay } from '../types';
+import { chartMaskOptions } from '../utils/chartMasks';
 
 export interface PolygonGeometry { type: 'Polygon' | 'MultiPolygon'; coordinates: unknown[] }
 export interface PolygonChoice { key: string; name: string; geometry: PolygonGeometry }
@@ -90,12 +91,8 @@ export function polygonRequest(state: PolygonState, geometry: PolygonGeometry, s
   const body: PolygonBody = {
     variable: state.currentDataset, geometry, support, percentiles: [10, 90],
     layer_masks: state.layerMasks.map(m => ({ dataset: m.dataset, threshold: m.threshold, mode: m.mode })),
+    ...chartMaskOptions(state, state.currentDataset),
   };
-  if (state.customMaskPath) body.custom_mask_path = state.customMaskPath;
-  if (state.dataMode === 'cog' && info.mask_file_list?.some(Boolean)) {
-    body.primary_mask = true;
-    body.mask_min_value = info.mask_min_value;
-  }
   if (state.refEnabled && info.uses_spatial_ref && info.algorithm === 'shift') {
     [body.ref_lat, body.ref_lon] = state.refMarkerPosition;
     if (state.refBufferEnabled) body.ref_buffer_m = state.refBufferRadius;

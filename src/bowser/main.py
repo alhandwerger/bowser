@@ -746,6 +746,68 @@ def _apply_layer_masks_md(
     return da
 
 
+def _chart_mask_options(
+    primary_mask: bool, mask_min_value: float | None, custom_mask_path: str | None
+) -> dict:
+    """Reject unsupported or incomplete mask requests rather than ignoring them."""
+    if primary_mask and state.mode != "cog":
+        raise HTTPException(
+            422,
+            "Configured primary masks require GeoTIFF charts; use GeoZarr layer_masks",
+        )
+    if mask_min_value is not None and (
+        not primary_mask or not np.isfinite(mask_min_value)
+    ):
+        raise HTTPException(
+            422, "A finite primary threshold requires primary_mask=true"
+        )
+    if custom_mask_path is not None and not custom_mask_path.strip():
+        raise HTTPException(422, "Custom mask path must not be empty")
+    return {
+        "primary_mask": primary_mask,
+        "mask_min_value": mask_min_value,
+        "custom_mask_path": custom_mask_path,
+    }
+
+
+def _custom_chart_mask_md(
+    source: "xr.DataArray", selection: "xr.DataArray", path: str | None
+) -> "xr.DataArray":
+    """Apply an uploaded mask on only the selected native point/window."""
+    if not path:
+        return selection
+    from rasterio.windows import Window
+
+    from .cog_sampling import read_native_mask
+    from .polygon import MAX_WINDOW_PIXELS, NativeGrid
+
+    cols = source.get_index("x").get_indexer(np.atleast_1d(selection.x.values))
+    rows = source.get_index("y").get_indexer(np.atleast_1d(selection.y.values))
+    window = Window(int(cols.min()), int(rows.min()), len(cols), len(rows))
+    if len(cols) * len(rows) > MAX_WINDOW_PIXELS:
+        raise HTTPException(
+            422, "Custom mask selection exceeds the native pixel budget"
+        )
+    grid = NativeGrid(
+        source.rio.crs,
+        source.rio.transform(recalc=True),
+        source.sizes["x"],
+        source.sizes["y"],
+    )
+    try:
+        mask = read_native_mask(path, grid, window)
+    except (ValueError, TypeError, OSError) as exc:
+        raise HTTPException(
+            422, "Could not apply custom chart mask: " + str(exc)
+        ) from exc
+    keep = np.isfinite(mask) & (mask > 0)
+    if "x" not in selection.dims:
+        return selection.where(bool(keep.item()))
+    return selection.where(
+        xr.DataArray(keep, dims=("y", "x"), coords={"y": selection.y, "x": selection.x})
+    )
+
+
 def _get_cog_samples(
     dataset_name: str,
     lon: float,
@@ -754,17 +816,23 @@ def _get_cog_samples(
     *,
     radius: float | None = None,
     time_idx: int | None = None,
+    primary_mask: bool = False,
+    mask_min_value: float | None = None,
+    custom_mask_path: str | None = None,
 ) -> np.ndarray:
     """Read bounded, native chart samples with aligned GeoTIFF layer masks."""
     from .cog_sampling import CogSampler, OutsideRasterError
 
     if dataset_name not in state.raster_groups:
-        raise HTTPException(
-            status_code=404, detail=f"Dataset {dataset_name} not found"
-        )
+        raise HTTPException(status_code=404, detail=f"Dataset {dataset_name} not found")
     try:
         sampler = CogSampler(
-            state.raster_groups[dataset_name], state.raster_groups, layer_masks
+            state.raster_groups[dataset_name],
+            state.raster_groups,
+            layer_masks,
+            primary_mask=primary_mask,
+            mask_min_value=mask_min_value,
+            custom_mask_path=custom_mask_path,
         )
         return (
             sampler.point(lon, lat, time_idx)
@@ -787,6 +855,7 @@ async def _get_ref_median(
     lat: float,
     buffer_m: float = 0.0,
     layer_masks: list[dict] | None = None,
+    **mask_options,
 ) -> np.ndarray:
     """Return reference time series.
 
@@ -794,11 +863,15 @@ async def _get_ref_median(
     """
     layer_masks = layer_masks or []
     if buffer_m <= 0:
-        return await _get_point_values(dataset_name, lon, lat, layer_masks)
+        return await _get_point_values(
+            dataset_name, lon, lat, layer_masks, **mask_options
+        )
     if state.mode == "cog":
         import warnings as _w
 
-        flat = _get_cog_samples(dataset_name, lon, lat, layer_masks, radius=buffer_m)
+        flat = _get_cog_samples(
+            dataset_name, lon, lat, layer_masks, radius=buffer_m, **mask_options
+        )
         with _w.catch_warnings():
             _w.simplefilter("ignore", RuntimeWarning)
             return np.nanmedian(flat, axis=1)
@@ -821,9 +894,13 @@ async def _get_ref_median(
     x_slice = da.x.sel(x=slice(cx - buffer_m - res_x, cx + buffer_m + res_x))
     y_slice = da.y.sel(y=slice(cy + buffer_m + res_y, cy - buffer_m - res_y))
     if x_slice.size == 0 or y_slice.size == 0:
-        return await _get_point_values(dataset_name, lon, lat, layer_masks)
+        return await _get_point_values(
+            dataset_name, lon, lat, layer_masks, **mask_options
+        )
 
-    window = da.sel(x=x_slice, y=y_slice)
+    window = _custom_chart_mask_md(
+        da, da.sel(x=x_slice, y=y_slice), mask_options.get("custom_mask_path")
+    )
     xx, yy = np.meshgrid(x_slice.values, y_slice.values)
     in_circle = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2) <= buffer_m
 
@@ -840,6 +917,7 @@ async def _get_point_values(
     lat: float,
     layer_masks: list[dict] | None = None,
     time_idx: int | None = None,
+    **mask_options,
 ) -> np.ndarray:
     """Get point values at lon/lat, with explicit layer masks in either mode.
 
@@ -861,12 +939,23 @@ async def _get_point_values(
             if dim is not None:
                 da = da.isel({dim: max(0, min(time_idx, da.sizes[dim] - 1))})
         x, y = state.transformer_from_lonlat.transform(lon, lat)
-        point_data = da.sel(x=x, y=y, method="nearest")
+        point_data = _custom_chart_mask_md(
+            da, da.sel(x=x, y=y, method="nearest"), mask_options.get("custom_mask_path")
+        )
         return np.atleast_1d(point_data.values)
     else:  # cog mode
-        if layer_masks:
+        if (
+            layer_masks
+            or mask_options.get("primary_mask")
+            or mask_options.get("custom_mask_path")
+        ):
             return _get_cog_samples(
-                dataset_name, lon, lat, layer_masks, time_idx=time_idx
+                dataset_name,
+                lon,
+                lat,
+                layer_masks or [],
+                time_idx=time_idx,
+                **mask_options,
             )
         if dataset_name not in state.raster_groups:
             raise HTTPException(
@@ -993,11 +1082,19 @@ async def multi_point(
     layer_masks: list[dict] = Body(
         [], description="List of {dataset, threshold, mode} mask dicts"
     ),
+    primary_mask: bool = Body(
+        False, description="Apply the configured GeoTIFF primary mask"
+    ),
+    mask_min_value: Optional[float] = Body(None, description="Primary mask threshold"),
+    custom_mask_path: Optional[str] = Body(
+        None, description="Uploaded single-band native-grid mask"
+    ),
     ref_buffer_m: float = Body(
         0.0, description="Buffer radius (m) for median re-referencing; 0 = single pixel"
     ),
 ):
     """Fetch time series data for multiple points efficiently."""
+    mask_options = _chart_mask_options(primary_mask, mask_min_value, custom_mask_path)
     # Get time values based on data mode
     if state.mode == "md":
         if dataset_name not in state.dataset.data_vars:
@@ -1024,6 +1121,7 @@ async def multi_point(
             ref_lat,
             ref_buffer_m,
             layer_masks,
+            **mask_options,
         )
 
     # Process each point
@@ -1045,6 +1143,7 @@ async def multi_point(
                 float(lon),  # type: ignore[arg-type]
                 float(lat),  # type: ignore[arg-type]
                 layer_masks,
+                **mask_options,
             )
 
             # Apply reference subtraction if provided
@@ -1416,11 +1515,19 @@ async def buffer_timeseries(
     layer_masks: list[dict] = Body(
         [], description="List of {dataset, threshold, mode} mask dicts"
     ),
+    primary_mask: bool = Body(
+        False, description="Apply the configured GeoTIFF primary mask"
+    ),
+    mask_min_value: Optional[float] = Body(None, description="Primary mask threshold"),
+    custom_mask_path: Optional[str] = Body(
+        None, description="Uploaded single-band native-grid mask"
+    ),
     ref_buffer_m: float = Body(
         0.0, description="Buffer radius (m) for median re-referencing; 0 = single pixel"
     ),
 ):
     """Collect all pixels within a circular buffer, return median + random samples."""
+    mask_options = _chart_mask_options(primary_mask, mask_min_value, custom_mask_path)
     if state.mode == "md":
         if dataset_name not in state.dataset.data_vars:
             raise HTTPException(
@@ -1446,7 +1553,9 @@ async def buffer_timeseries(
         if x_slice.size == 0 or y_slice.size == 0:
             raise HTTPException(status_code=404, detail="Buffer outside dataset extent")
 
-        window = da.sel(x=x_slice, y=y_slice)
+        window = _custom_chart_mask_md(
+            da, da.sel(x=x_slice, y=y_slice), custom_mask_path
+        )
         # Circular mask
         xx, yy = np.meshgrid(x_slice.values, y_slice.values)
         dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
@@ -1466,6 +1575,7 @@ async def buffer_timeseries(
                 ref_lat,
                 ref_buffer_m,
                 layer_masks,
+                **mask_options,
             )
             flat = flat - ref_vals[:, np.newaxis]
 
@@ -1478,11 +1588,16 @@ async def buffer_timeseries(
         x_values = rg.x_values
 
         flat = _get_cog_samples(
-            dataset_name, lon, lat, layer_masks, radius=buffer_m
+            dataset_name, lon, lat, layer_masks, radius=buffer_m, **mask_options
         )
         if ref_lon is not None and ref_lat is not None:
             ref_vals = await _get_ref_median(
-                dataset_name, ref_lon, ref_lat, ref_buffer_m, layer_masks
+                dataset_name,
+                ref_lon,
+                ref_lat,
+                ref_buffer_m,
+                layer_masks,
+                **mask_options,
             )
             flat = flat - ref_vals[:, np.newaxis]
 
@@ -2331,7 +2446,7 @@ def _build_masked_cog_dataarray(
         if m.rio.crs != da_.rio.crs or m.shape != da_.shape:
             m = m.rio.reproject_match(da_)
         if inclusive:
-            return da_.where(m >= thr)
+            return da_.where(np.isfinite(m) & (m != 0) & (m >= thr))
         keep = m <= thr if mode == "max" else m > thr
         return da_.where(np.isfinite(m) & keep)
 
@@ -2691,7 +2806,9 @@ def export_geotiff(
         else:
             rg = target.raster_groups[variable]
             allowed = rg.uses_spatial_ref and rg.algorithm == "shift"
-            idx = 0 if time_idx is None else max(0, min(time_idx, len(rg.file_list) - 1))
+            idx = (
+                0 if time_idx is None else max(0, min(time_idx, len(rg.file_list) - 1))
+            )
             source = rioxarray.open_rasterio(rg.file_list[idx], masked=True).squeeze(
                 "band", drop=True
             )
