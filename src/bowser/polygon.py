@@ -9,7 +9,7 @@ import numpy as np
 import rasterio
 import xarray as xr
 from affine import Affine
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from rasterio.errors import WindowError
 from rasterio.features import geometry_mask, geometry_window
 from rasterio.warp import transform_geom
@@ -20,11 +20,21 @@ from shapely.geometry import shape
 MAX_VERTICES = 10_000
 MAX_WINDOW_PIXELS = 2_000_000
 MAX_PIXEL_EPOCHS = 50_000_000
+ReferenceOffsets = list[float] | Callable[[], list[float]] | None
 _ANGULAR_UNITS = {"degree", "degrees", "deg", "radian", "radians", "rad"}
 
 
+class PolygonMask(BaseModel):
+    """Describe an explicit threshold in a mask layer's native units."""
+
+    model_config = ConfigDict(extra="forbid")
+    dataset: str = Field(min_length=1)
+    threshold: float = Field(default=0.5, allow_inf_nan=False)
+    mode: Literal["min", "max"] = "min"
+
+
 class PolygonRequest(BaseModel):
-    """Request stored-value summaries, without implicit viewer transformations."""
+    """Request native summaries with explicit masks and spatial referencing."""
 
     model_config = ConfigDict(extra="forbid")
     variable: str = Field(min_length=1)
@@ -33,6 +43,26 @@ class PolygonRequest(BaseModel):
     percentiles: list[float] = Field(
         default_factory=lambda: [10, 90], min_length=1, max_length=20
     )
+    layer_masks: list[PolygonMask] = Field(default_factory=list, max_length=10)
+    primary_mask: bool = False
+    mask_variable: str | None = Field(default=None, min_length=1)
+    mask_min_value: float | None = Field(default=None, allow_inf_nan=False)
+    custom_mask_path: str | None = Field(default=None, min_length=1)
+    ref_lon: float | None = Field(default=None, ge=-180, le=180, allow_inf_nan=False)
+    ref_lat: float | None = Field(default=None, ge=-90, le=90, allow_inf_nan=False)
+    ref_buffer_m: float = Field(default=0, ge=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _explicit_options(self) -> "PolygonRequest":
+        if (self.ref_lon is None) != (self.ref_lat is None):
+            raise ValueError("Supply both reference longitude and latitude")
+        if self.ref_buffer_m and self.ref_lon is None:
+            raise ValueError("A reference buffer requires reference coordinates")
+        if not self.primary_mask and (
+            self.mask_variable is not None or self.mask_min_value is not None
+        ):
+            raise ValueError("Primary mask options require primary_mask=true")
+        return self
 
     @field_validator("percentiles")
     @classmethod
@@ -170,6 +200,7 @@ def _summaries(
     pixels: int,
     support: str,
     percentiles: list[float],
+    reference: list[float] | None = None,
 ) -> tuple[list[dict], list[int], int]:
     common = np.ones(pixels, dtype=bool)
     counts = []
@@ -183,7 +214,10 @@ def _summaries(
         valid = np.isfinite(frame)
         if support == "common":
             valid &= common
-        values = frame[valid]
+        offset = 0 if reference is None else reference[index]
+        # Reference availability is an epoch property, not a reason to remove
+        # otherwise common pixels from every other epoch's support.
+        values = frame[valid] - offset if np.isfinite(offset) else np.array([])
         statistics.append(
             {
                 "count": int(values.size),
@@ -209,8 +243,12 @@ def summarize_xarray(
     source: xr.DataArray,
     request: PolygonRequest,
     labels: list[str],
+    *,
+    adjust: Callable | None = None,
+    reference: ReferenceOffsets = None,
 ) -> dict:
     """Summarize a level-zero GeoZarr variable using bounded spatial reads."""
+    _explicit_adjustments(request, adjust, reference)
     if not {"x", "y"}.issubset(source.dims):
         raise ValueError("Source requires x/y spatial dimensions")
     if any(axis not in source.coords for axis in ("x", "y")):
@@ -239,7 +277,13 @@ def summarize_xarray(
     )
     if grid.transform.b != 0 or grid.transform.d != 0:
         raise ValueError("GeoZarr statistics require a rectilinear x/y grid")
-    window, inside, clipped = _selection(grid, request.geometry, count)
+    work = (
+        1
+        + len(request.layer_masks)
+        + request.primary_mask
+        + bool(request.custom_mask_path)
+    )
+    window, inside, clipped = _selection(grid, request.geometry, count * work)
     subset = source.isel(
         y=slice(int(window.row_off), int(window.row_off + window.height)),
         x=slice(int(window.col_off), int(window.col_off + window.width)),
@@ -247,18 +291,38 @@ def summarize_xarray(
 
     def load(index: int) -> np.ndarray:
         frame = subset.isel({dim: index}) if dim else subset
-        return _values(frame.transpose("y", "x").values, source.attrs)[inside]
+        values = _values(frame.transpose("y", "x").values, source.attrs)
+        if adjust is not None:
+            values = adjust(index, window, grid, values)
+        return values[inside]
 
-    return _result(load, count, inside, clipped, grid, labels, units, request)
+    return _result(
+        load, count, inside, clipped, grid, labels, units, request, reference=reference
+    )
 
 
-def summarize_rasters(group: Any, request: PolygonRequest) -> dict:
+def summarize_rasters(
+    group: Any,
+    request: PolygonRequest,
+    *,
+    adjust: Callable | None = None,
+    reference: ReferenceOffsets = None,
+) -> dict:
     """Summarize identical-grid, identical-unit GeoTIFFs with windowed reads."""
+    _explicit_adjustments(request, adjust, reference)
     if not group.file_list:
         raise ValueError("No rasters in the selected layer")
     with rasterio.open(group.file_list[0]) as first:
         grid = NativeGrid(first.crs, first.transform, first.width, first.height)
-    window, inside, clipped = _selection(grid, request.geometry, len(group.file_list))
+    work = (
+        1
+        + len(request.layer_masks)
+        + request.primary_mask
+        + bool(request.custom_mask_path)
+    )
+    window, inside, clipped = _selection(
+        grid, request.geometry, len(group.file_list) * work
+    )
     units: list[str | None] = []
 
     def load(index: int) -> np.ndarray:
@@ -283,6 +347,8 @@ def summarize_rasters(group: Any, request: PolygonRequest) -> dict:
             values = _values(src.read(1, window=window, masked=True))
             if group.nodata is not None:
                 values = np.where(values == group.nodata, np.nan, values)
+            if adjust is not None:
+                values = adjust(index, window, grid, values)
             return values[inside]
 
     return _result(
@@ -295,7 +361,17 @@ def summarize_rasters(group: Any, request: PolygonRequest) -> dict:
         None,
         request,
         units,
+        reference=reference,
     )
+
+
+def _explicit_adjustments(request, adjust, reference) -> None:
+    if (
+        request.layer_masks or request.primary_mask or request.custom_mask_path
+    ) and adjust is None:
+        raise ValueError("Requested masks require a validated support adapter")
+    if request.ref_lon is not None and reference is None:
+        raise ValueError("Requested reference requires explicit sampled offsets")
 
 
 def _result(
@@ -308,15 +384,21 @@ def _result(
     units: str | None,
     request: PolygonRequest,
     raster_units: list | None = None,
+    reference: ReferenceOffsets = None,
 ) -> dict:
     if len(labels) != count:
         raise ValueError("Labels must match the source axis length")
+    if callable(reference):
+        reference = reference()
+    if reference is not None and len(reference) != count:
+        raise ValueError("Reference must have one offset per source slice")
     statistics, valid_counts, common = _summaries(
         load,
         count,
         int(inside.sum()),
         request.support,
         request.percentiles,
+        reference,
     )
     if raster_units:
         units = raster_units[0]

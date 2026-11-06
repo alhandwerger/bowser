@@ -53,41 +53,81 @@ print(result["labels"], [row["median"] for row in result["statistics"]])
 
 The result reports `polygon_pixels`, `valid_per_date` (before a common-support
 intersection), `common_pixels`, per-row counts, geometry, grid, labels, units,
-and scientific limitations. Source filenames and local directory paths are not
-included in the result. The result contains no implicit temporal zero datum.
+and scientific limitations. Source directory paths are not included; mask
+provenance may identify basenames. No implicit temporal zero datum is added.
 
-## Explicit initial scope
+## Explicit masks and references
 
-This endpoint summarizes **stored values**. It does not apply a moved viewer
-reference, optional quality masks, or a connected-component screen. These
-limits are always present in the response:
+The default still summarizes stored values with intrinsic nodata only. Options
+are applied only when sent in the request, and reported in `masks`,
+`optional_masks_applied`, `reference`, and `reference_details`.
 
-```json
-{"reference": "stored", "optional_masks_applied": false,
- "component_compatibility": "unverified"}
-```
+- `layer_masks`: a list of `{dataset, threshold, mode}` objects. Thresholds are
+  in the mask layer's native units. `min` retains values at/above the threshold
+  in GeoZarr and strictly above it in direct GeoTIFF mode, preserving existing
+  viewer/export comparisons. GeoZarr `max` retains values at/below the threshold;
+  direct-GeoTIFF `max` remains unsupported and returns 422.
+- `primary_mask: true`: explicitly use the primary mask. GeoZarr additionally
+  requires `mask_variable`; its default threshold is 0.1 and comparison is `>`.
+  Direct GeoTIFF uses the configured primary-mask files, threshold and `>=`.
+  `mask_min_value` overrides that threshold. Primary options without the
+  explicit flag are rejected, so an ignored setting cannot look applied.
+- `custom_mask_path`: use an existing uploaded single-band raster, on the exact
+  source grid, retaining `> 0` for GeoZarr or `> 0.5` for direct GeoTIFF.
+- `ref_lon`, `ref_lat`: request a point reference in WGS84 decimal degrees.
+  `ref_buffer_m` optionally requests a circular source median in meters. Buffer
+  references require a projected CRS in meters. A layer must explicitly support
+  interactive referencing under the same rules as GeoTIFF export.
 
-It therefore does not claim to reproduce a dynamically referenced/masked map.
-Reference/mask fields are rejected as unsupported request arguments rather
-than silently ignored. Future chart wiring must preserve this distinction or
-add separately tested reference/mask support first. Disconnected offsets can be
-ambiguous; component numbers are never assumed comparable between pairs or
-dates. Spatial spread is not measurement uncertainty, and an apparent history
-does not establish reference stability or ground motion.
+References use the same source sampling helper as reference-aware export:
+nearest coordinate for GeoZarr, containing pixel for direct GeoTIFF, or a
+circular source median. Samples use valid source pixels before optional display
+masks. Each source slice is shifted once in its native units, before its
+polygon statistics are calculated. There is no unit conversion, new temporal
+zero, or change to projection/processing order. Stored downslope fields, for
+example, are shifted in their stored units; this does not re-reference LOS and
+then recompute a downslope projection.
+
+`reference_details` identifies the requested WGS84 coordinates, method, radius,
+per-epoch offsets and valid reference counts. A legitimate zero reference
+remains valid. If an otherwise valid reference location has no source support
+at one epoch, that epoch has null relative statistics and count zero. Its
+absence does not remove otherwise common polygon pixels from all other epochs.
+`valid_per_date` and `common_pixels` describe source/quality support, while
+per-row counts also reflect reference availability. Invalid coordinates,
+outside-grid positions and unsupported settings return 422; there is no
+silent fallback to stored values.
+
+All masks must share the exact native data grid/CRS. No silent resampling is
+introduced. Dynamic GeoZarr masks must have the same axis length and coordinate
+values as the selected layer. Dynamic direct-GeoTIFF layer masks must have
+matching configured labels; a single mask file is explicitly treated as static.
+Configured primary GeoTIFF mask lists follow the group's supplied slice order;
+this does not independently infer acquisition dates from filenames. Mismatched
+or ambiguous axes/grids are rejected instead of clamping a mask index or
+inventing a ministack-to-date mapping.
+
+Connected-component screening remains unimplemented and explicitly reported
+as unverified. Component IDs are not assumed comparable across dates or pairs.
+A selected reference is not proof of stable ground or component compatibility;
+spatial spread is not measurement uncertainty. Unknown request fields remain
+errors. This contribution supplies backend support; chart wiring is separate.
 
 The full server supports explicit, regular rectilinear GeoZarr x/y coordinate
-grids and at most one
-non-spatial axis. Single-band GeoTIFF groups must share the exact grid, CRS and
+grids and at most one non-spatial axis. Single-band GeoTIFF groups must share the exact grid, CRS and
 identical units, including whether units are missing. Rotated GeoTIFF grids
-can use the raster's affine; rotated GeoZarr grids are rejected. Polygons
+can use the raster's affine for stored-value summaries; interactive references
+require rectilinear grids in either storage mode. Rotated GeoZarr grids are
+rejected. Polygons
 outside the grid or containing no native pixel centers return 422. Partial
 coverage is summarized only on-grid and explicitly warned. Invalid topology,
 unclosed rings and antimeridian-spanning polygons are rejected.
 
 To bound memory and work, requests allow at most 10,000 vertices, a bounding
 window of 2,000,000 native pixels, and 50,000,000 bounding-window pixel-epochs.
-These budgets are checked before reading raster values. Two spatially bounded
-passes determine common support and then exact summaries, retaining one frame
+These budgets include requested mask work and are checked before reading raster
+values or sampling references. Reference patches have their own bounded
+pixel-epoch check. Two spatially bounded passes determine common support and then exact summaries, retaining one frame
 at a time. Percentiles use all eligible pixels rather than a sampled preview.
 The budget covers each pass; two passes can read the same source window twice.
 
