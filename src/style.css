@@ -1681,6 +1681,27 @@ img.huechange { filter: hue-rotate(120deg); }
   font-size: 0.85em;
 }
 
+/* Polygon charts live outside the map DOM so chart clicks never place points. */
+.polygon-chart-window {
+  box-sizing: border-box;
+  position: fixed;
+  z-index: 1400;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
+  background: var(--sb-surface);
+  color: var(--sb-text);
+  border: 1px solid var(--sb-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+  font-size: 0.85em;
+}
+.polygon-chart-window .chart-header { cursor: grab; gap: 8px; }
+.polygon-chart-canvas { flex: 1; min-height: 110px; position: relative; }
+.polygon-summary-caption { font-size: 0.82em; padding: 4px 0; }
+details.polygon-summary-caption { max-height: 100px; overflow: auto; }
+.polygon-summary-actions { display: flex; gap: 8px; padding: 4px 0; flex-wrap: wrap; }
+
 .identify-head {
   display: flex;
   align-items: center;
