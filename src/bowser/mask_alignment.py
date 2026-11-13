@@ -1,4 +1,4 @@
-"""Validate GeoZarr mask coordinates without loading raster values."""
+"""Validate native mask alignment and signed/absolute display thresholds."""
 
 from __future__ import annotations
 
@@ -7,6 +7,57 @@ from typing import Any
 
 import numpy as np
 import xarray as xr
+
+MASK_MODES = ("min", "max", "abs_min", "abs_max")
+
+
+def validate_mask_threshold(mode: str, threshold: float) -> None:
+    """Require known modes and finite, nonnegative absolute thresholds."""
+    if mode not in MASK_MODES or not np.isfinite(threshold):
+        raise ValueError(
+            "Masks require a finite threshold and min/max/abs_min/abs_max mode"
+        )
+    if mode.startswith("abs_") and threshold < 0:
+        raise ValueError("Absolute mask thresholds must be nonnegative")
+
+
+def mask_operator(mode: str, *, inclusive_min: bool = True) -> str:
+    """Describe comparisons without changing legacy COG strict-min semantics."""
+    if mode not in MASK_MODES:
+        raise ValueError("Unknown mask mode")
+    return {
+        "min": ">=" if inclusive_min else ">",
+        "max": "<=",
+        "abs_min": "|value| >=",
+        "abs_max": "|value| <=",
+    }[mode]
+
+
+def _comparison(values: Any, threshold: float, operator: str) -> Any:
+    if not np.isfinite(threshold):
+        raise ValueError("Mask thresholds must be finite")
+    if operator.startswith("|value|"):
+        if threshold < 0:
+            raise ValueError("Absolute mask thresholds must be nonnegative")
+        # Promote before abs: signed integer minima otherwise wrap around.
+        values = np.abs(values.astype("float64"))
+        operator = operator.removeprefix("|value| ")
+    if operator == ">":
+        return values > threshold
+    if operator == ">=":
+        return values >= threshold
+    if operator == "<=":
+        return values <= threshold
+    raise ValueError("Unsupported mask comparison")
+
+
+def numpy_mask_condition(
+    values: np.ndarray, threshold: float, operator: str
+) -> np.ndarray:
+    """Compare native numeric masks without reviving masked/nonfinite samples."""
+    raw = np.ma.getdata(values)
+    valid = ~np.ma.getmaskarray(values) & np.isfinite(raw)
+    return valid & _comparison(raw, threshold, operator)
 
 
 def parse_layer_masks(raw: str | list | None) -> list[dict[str, Any]]:
@@ -28,8 +79,7 @@ def parse_layer_masks(raw: str | list | None) -> list[dict[str, Any]]:
         except (TypeError, ValueError) as exc:
             raise ValueError("Mask thresholds must be finite numbers") from exc
         mode = mask.get("mode", "min")
-        if not np.isfinite(threshold) or mode not in ("min", "max"):
-            raise ValueError("Masks require finite thresholds and min/max mode")
+        validate_mask_threshold(mode, threshold)
         result.append({"dataset": name, "threshold": threshold, "mode": mode})
     return result
 
@@ -79,20 +129,9 @@ def align_mask(data: xr.DataArray, mask: xr.DataArray) -> xr.DataArray:
 
 def mask_condition(mask: xr.DataArray, threshold: float, operator: str) -> xr.DataArray:
     """Compare finite, non-nodata mask values in native units, preserving zeros."""
-    if not np.isfinite(threshold):
-        raise ValueError("Mask thresholds must be finite")
-    if operator not in (">", ">=", "<="):
-        raise ValueError("Unsupported mask comparison")
     valid = np.isfinite(mask)
     for key in ("_FillValue", "missing_value", "fill_value", "nodata"):
         if key in mask.attrs and mask.attrs[key] is not None:
             for value in np.atleast_1d(mask.attrs[key]):
                 valid = valid & (mask != value)
-    comparison = (
-        mask > threshold
-        if operator == ">"
-        else mask >= threshold
-        if operator == ">="
-        else mask <= threshold
-    )
-    return valid & comparison
+    return valid & _comparison(mask, threshold, operator)

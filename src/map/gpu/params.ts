@@ -54,6 +54,9 @@ export function gpuParamsFromTileQuery(params: Record<string, string>, dataMode:
     if (masks.length > 1) return { ok: false, reason: 'more than one layer mask not on the GPU path yet' };
     if (masks.length === 1) {
       const m = masks[0];
+      if (m.mode !== undefined && m.mode !== 'min' && m.mode !== 'max') {
+        return { ok: false, reason: 'this mask comparison uses server-rendered tiles' };
+      }
       mask = { dataset: m.dataset, threshold: Number(m.threshold ?? 0.5), mode: m.mode === 'max' ? 'max' : 'min' };
     }
   }
