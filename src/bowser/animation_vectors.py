@@ -3,6 +3,7 @@
 import math
 from typing import Any
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 _DEPTH = {
@@ -101,8 +102,8 @@ class AnimationOutline(BaseModel):
 def prepare_outlines(da, outlines, size):
     """Project and clip real boundaries once, without creating viewport edges."""
     from pyproj import Transformer
+    from shapely import transform
     from shapely.geometry import box, shape
-    from shapely.ops import transform
 
     transformer = Transformer.from_crs(4326, da.rio.crs, always_xy=True)
     footprint = box(*da.rio.bounds())
@@ -136,7 +137,11 @@ def prepare_outlines(da, outlines, size):
                 geom = geom.boundary  # clip boundaries, not filled polygons
             try:
                 projected = transform(
-                    lambda x, y: transformer.transform(x, y, errcheck=True), geom
+                    geom,
+                    lambda xy: np.column_stack(
+                        transformer.transform(xy[:, 0], xy[:, 1], errcheck=True)
+                    ),
+                    include_z=False,
                 )
                 clipped = projected.intersection(footprint)
             except Exception as exc:

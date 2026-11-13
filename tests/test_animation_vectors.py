@@ -87,3 +87,26 @@ def test_vertex_budget_and_malformed_shapes_reject_explicitly():
             vmax=1,
             outlines=[outline, outline],
         )
+
+
+def test_projection_does_not_use_deprecated_ops_transform(monkeypatch):
+    """Shapely 2.2 emits this warning, which strict CI correctly treats as an error."""
+    import warnings
+
+    import shapely.ops
+
+    original = shapely.ops.transform
+
+    def deprecated(*args, **kwargs):
+        warnings.warn(
+            "shapely.ops.transform is deprecated", DeprecationWarning, stacklevel=2
+        )
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(shapely.ops, "transform", deprecated)
+    outline = AnimationOutline(
+        geometries=[{"type": "LineString", "coordinates": [[1, 1], [3, 3]]}]
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        assert prepare_outlines(_grid(), [outline], (400, 400))
