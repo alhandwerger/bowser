@@ -10,6 +10,15 @@ from typing import Any, Callable
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .animation_points import (
+    PLOT_HEIGHT,
+    AnimationPoint,
+    add_plots,
+    draw_locations,
+    elapsed_times,
+    locate_points,
+    sample_points,
+)
 from .polygon import NativeGrid, PolygonMask
 from .polygon_masks import _axis, raster_masks, xarray_masks
 
@@ -34,6 +43,7 @@ class AnimationRequest(BaseModel):
     width: int = Field(default=512, ge=64, le=1024)
     bounds: list[float] | None = Field(default=None, min_length=4, max_length=4)
     layer_masks: list[PolygonMask] = Field(default_factory=list, max_length=10)
+    points: list[AnimationPoint] = Field(default_factory=list, max_length=5)
     custom_mask_path: str | None = None
     ref_lon: float | None = Field(default=None, ge=-180, le=180)
     ref_lat: float | None = Field(default=None, ge=-90, le=90)
@@ -45,6 +55,10 @@ class AnimationRequest(BaseModel):
         """Reject invalid dates/limits instead of silently clamping requests."""
         if not 2 <= self.end_index - self.start_index + 1 <= MAX_FRAMES:
             raise ValueError("Choose 2 to 90 consecutive saved epochs")
+        if self.points and (
+            self.width < 320 or len({p.id for p in self.points}) != len(self.points)
+        ):
+            raise ValueError("Point plots need width at least 320 and unique point IDs")
         if self.vmin >= self.vmax:
             raise ValueError("Color limits must increase")
         if (self.ref_lon is None) != (self.ref_lat is None):
@@ -147,14 +161,27 @@ def render(request: AnimationRequest, target: Any, prepare: Callable):
     except Exception as exc:
         raise ValueError("Unknown animation colormap") from exc
     labels, indices = source_info(target, request)
+    selected_labels = [labels[i] for i in indices]
+    times = elapsed_times(selected_labels) if request.points else None
+    data_colors = 248 if request.points else 254
     # Reserve two colors for nodata/header text. This display quantization is
     # constant for every frame; it does not affect native data or color limits.
     palette = np.vstack(
         (
-            lut[np.round(np.linspace(0, 255, 254)).astype(int), :3],
+            lut[np.round(np.linspace(0, 255, data_colors)).astype(int), :3],
             [[255, 255, 255], [0, 0, 0]],
         )
     ).astype("uint8")
+    if request.points:
+        colors = [tuple(bytes.fromhex(p.color[1:])) for p in request.points]
+        palette = np.vstack(
+            (
+                palette[:248],
+                colors + [(0, 0, 0)] * (5 - len(colors)),
+                [[128, 128, 128], [255, 255, 255], [0, 0, 0]],
+            )
+        ).astype("uint8")
+    point_records = []
     frames, support, references = [], [], []
     units = "stored units (not supplied)"
     started = time.monotonic()
@@ -169,6 +196,10 @@ def render(request: AnimationRequest, target: Any, prepare: Callable):
             if grid is not None and native != grid:
                 raise ValueError("Animation frames must share the same native grid")
             grid = native
+            if request.points:
+                if not point_records:
+                    point_records = locate_points(da, request.points)
+                sample_points(da, point_records)
             if request.bounds:
                 box = transform_bounds(
                     4326, da.rio.crs, *request.bounds, densify_pts=21
@@ -194,7 +225,12 @@ def render(request: AnimationRequest, target: Any, prepare: Callable):
             h, w = values.shape
             factor = min(request.width / w, 1024 / h)
             size = (max(1, round(w * factor)), max(1, round(h * factor)))
-            if size[0] * size[1] * len(indices) > MAX_DISPLAY_PIXELS:
+            display_height = size[1] + (48 + PLOT_HEIGHT if request.points else 0)
+            if request.points and size[0] < 320:
+                raise ValueError(
+                    "Point plot raster aspect requires output width at least 320"
+                )
+            if size[0] * display_height * len(indices) > MAX_DISPLAY_PIXELS:
                 raise ValueError(
                     "Display exceeds GIF pixel budget; reduce width or epochs"
                 )
@@ -204,9 +240,9 @@ def render(request: AnimationRequest, target: Any, prepare: Callable):
                 0,
                 1,
             )
-            pixels = np.where(valid, (scaled * 253).astype("uint8"), 254).astype(
-                "uint8"
-            )
+            pixels = np.where(
+                valid, (scaled * (data_colors - 1)).astype("uint8"), 254
+            ).astype("uint8")
             image = Image.fromarray(pixels).resize(size, Image.Resampling.NEAREST)
             image.putpalette(palette.ravel().tolist())
             frame = Image.new("P", (size[0], size[1] + 48), 254)
@@ -220,12 +256,19 @@ def render(request: AnimationRequest, target: Any, prepare: Callable):
                 f"{request.vmin:g} to {request.vmax:g} {units}",
                 fill=255,
             )
+            if point_records:
+                draw_locations(frame, da, point_records, native[1], size)
             frames.append(frame)
         finally:
             da.close()
+    plot = None
+    if point_records:
+        frames, plot = add_plots(frames, point_records, times, selected_labels, units)
     duration = int(round(1000 / request.fps / 10) * 10)
     manifest = {
         "kind": "raster GIF display",
+        "point_histories": point_records,
+        "plot": plot,
         "variable": request.variable,
         "indices": indices,
         "labels": [labels[i] for i in indices],
@@ -247,15 +290,12 @@ def render(request: AnimationRequest, target: Any, prepare: Callable):
         "layer_masks": [m.model_dump() for m in request.layer_masks],
         "custom_mask_applied": bool(request.custom_mask_path),
         "limitations": [
-            (
-                "Display only: 254 fixed data colors plus white/black; "
-                "nearest-neighbor resize"
-            ),
+            (f"Display only: {data_colors} data colors; nearest-neighbor resize"),
             "Equal playback durations do not represent unequal acquisition intervals",
-            "No inferred zero epochs, interpolation, smoothing or new fitting",
+            "No inferred zero epochs, numeric interpolation, smoothing or new fitting",
             (
-                "Raster only: no basemap, terrain context, annotations, "
-                "opacity blending or linked plot"
+                "No basemap, terrain context, imported annotations, "
+                "opacity blending; optional native-pixel histories only"
             ),
         ],
     }
