@@ -39,10 +39,33 @@ class OutsideRasterError(ValueError):
     """Indicate a selection without native source pixel centers."""
 
 
+def read_native_mask(path: str, grid: NativeGrid, window: Window) -> np.ndarray:
+    """Read only an exactly aligned, single-band mask window."""
+    with rasterio.open(path) as source:
+        actual = NativeGrid(source.crs, source.transform, source.width, source.height)
+        if actual != grid:
+            raise ValueError(
+                "Chart data and masks must share the exact native grid and CRS"
+            )
+        if source.count != 1:
+            raise ValueError("Chart masks must be single-band scalar rasters")
+        _linear(source.dtypes[0], None)
+        return _values(source.read(1, window=window, masked=True))
+
+
 class CogSampler:
     """Sample real-valued band-one stacks without resampling or date inference."""
 
-    def __init__(self, group: Any, groups: dict, layer_masks: list[dict]) -> None:
+    def __init__(
+        self,
+        group: Any,
+        groups: dict,
+        layer_masks: list[dict],
+        *,
+        primary_mask: bool = False,
+        mask_min_value: float | None = None,
+        custom_mask_path: str | None = None,
+    ) -> None:
         """Validate configured mask labels and open source grid metadata."""
         self.group = group
         self.paths = group.file_list
@@ -50,6 +73,20 @@ class CogSampler:
             raise ValueError("The selected layer has no raster files")
         self.labels = list(map(str, group.x_values))
         self.masks = []
+        if primary_mask:
+            paths = group.mask_file_list
+            if (
+                not paths
+                or any(not path for path in paths)
+                or len(paths) not in (1, len(self.paths))
+            ):
+                raise ValueError("No complete primary mask is configured")
+            threshold = (
+                group.mask_min_value if mask_min_value is None else mask_min_value
+            )
+            if not np.isfinite(threshold):
+                raise ValueError("Primary mask threshold must be finite")
+            self.masks.append((paths, threshold, "primary", None))
         for mask in _mask_specs(layer_masks):
             if mask["dataset"] not in groups:
                 raise ValueError(f"Unknown mask layer: {mask['dataset']}")
@@ -64,6 +101,8 @@ class CogSampler:
             self.masks.append(
                 (paths, mask["threshold"], mask["mode"], mask_group.nodata)
             )
+        if custom_mask_path:
+            self.masks.append(([custom_mask_path], 0.5, "min", None))
         with rasterio.open(self.paths[0]) as source:
             self.grid = NativeGrid(
                 source.crs, source.transform, source.width, source.height
@@ -98,6 +137,13 @@ class CogSampler:
     def _read(
         self, path: str, window: Window, nodata: float | None, *, mask: bool = False
     ) -> np.ndarray:
+        if mask:
+            values = read_native_mask(path, self.grid, window)
+            return (
+                np.where(values == nodata, np.nan, values)
+                if nodata is not None
+                else values
+            )
         with rasterio.open(path) as source:
             actual = NativeGrid(
                 source.crs, source.transform, source.width, source.height
@@ -106,8 +152,6 @@ class CogSampler:
                 raise ValueError(
                     "Chart data and masks must share the exact native grid and CRS"
                 )
-            if mask and source.count != 1:
-                raise ValueError("Chart masks must be single-band scalar rasters")
             _linear(source.dtypes[0], None)
             values = _values(source.read(1, window=window, masked=True))
         if nodata is not None:
@@ -121,7 +165,13 @@ class CogSampler:
             mask = self._read(
                 paths[0 if len(paths) == 1 else index], window, nodata, mask=True
             )
-            comparison = mask <= threshold if mode == "max" else mask > threshold
+            comparison = (
+                mask <= threshold
+                if mode == "max"
+                else (mask != 0) & (mask >= threshold)
+                if mode == "primary"
+                else mask > threshold
+            )
             keep &= np.isfinite(mask) & comparison
         return np.where(keep, values, np.nan)
 

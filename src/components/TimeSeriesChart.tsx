@@ -1,3 +1,4 @@
+import { chartMaskOptions } from '../utils/chartMasks';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useDraggableResizable } from '../hooks/useDraggableResizable.tsx';
 import { Chart as ChartJS, TimeScale, LinearScale, CategoryScale, PointElement, LineElement, Title, Tooltip, Legend, Filler, InteractionItem } from 'chart.js';
@@ -184,10 +185,19 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
     ? winDsNames
     : (followedDs ? [followedDs] : []);
 
+  const [pointError, setPointError] = useState<string | null>(null);
+  const [bufferError, setBufferError] = useState<string | null>(null);
+  const requestError = state.bufferEnabled ? bufferError : pointError;
+  const requestErrorContent = requestError ? (
+    <div role="alert" className="chart-request-error" style={{ color: 'var(--sb-red)', padding: 8 }}>
+      {requestError}
+    </div>
+  ) : null;
   const pointRequest = useRef(0);
   const updateChart = useCallback(async () => {
     const request = ++pointRequest.current;
     setChartDataMap({});
+    setPointError(null);
     if (!state.showChart || !state.currentDataset || state.timeSeriesPoints.length === 0) {
       setIsLoading(false);
       return;
@@ -224,6 +234,7 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
             apiPoints, dsName, refLon, refLat, false,
             state.layerMasks,
             state.refEnabled && state.refBufferEnabled ? state.refBufferRadius : 0,
+            chartMaskOptions(state, dsName),
           );
           return { dsName, tsData };
         })
@@ -232,7 +243,11 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
       results.forEach(({ dsName, tsData }) => {
         if (tsData) newMap[dsName] = tsData;
       });
-      if (pointRequest.current === request) setChartDataMap(newMap);
+      if (pointRequest.current === request) {
+        setChartDataMap(newMap);
+        setPointError(results.some(r => !r.tsData)
+          ? 'Point data unavailable for these settings. Check masks and server compatibility.' : null);
+      }
     } catch (error) {
       console.error('Error updating chart:', error);
     } finally {
@@ -249,6 +264,8 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
     state.refBufferRadius,
     state.datasetInfo,
     state.layerMasks,
+    state.customMaskPath,
+    state.dataMode,
     fetchMultiPointTimeSeries,
   ]);
 
@@ -261,6 +278,7 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
   useEffect(() => {
     let current = true;
     setBufferData({});
+    setBufferError(null);
     if (!state.bufferEnabled || !state.showChart || !state.currentDataset) return;
     const visiblePoints = state.timeSeriesPoints.filter(p => p.visible);
     if (visiblePoints.length === 0) return;
@@ -282,6 +300,7 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
             refLon, refLat,
             state.layerMasks,
             state.refEnabled && state.refBufferEnabled ? state.refBufferRadius : 0,
+            chartMaskOptions(state, dsName),
           );
           return { key: `${dsName}::${p.id}`, result };
         });
@@ -291,6 +310,8 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
       const newData: { [key: string]: any } = {};
       results.forEach(({ key, result }) => { if (result) newData[key] = result; });
       setBufferData(newData);
+      setBufferError(results.some(r => !r.result)
+        ? 'Buffer data unavailable for these settings. Check masks and server compatibility.' : null);
     }).catch(error => {
       if (current) console.error('Error updating buffer chart:', error);
     });
@@ -306,6 +327,8 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
     state.refBufferEnabled,
     state.refBufferRadius,
     state.layerMasks,
+    state.customMaskPath,
+    state.dataMode,
     state.datasetInfo,
     JSON.stringify(state.timeSeriesPoints.map(p => ({ id: p.id, position: p.position, visible: p.visible }))),
     state.refMarkerPosition,
@@ -767,6 +790,7 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
     return (
       <div id="chart-container" ref={panelRef} style={panelStyle}>
         {headerContent}
+        {requestErrorContent}
         <div className="chart-placeholder">
           <p>No points selected.</p><p><small>Click on the map to add points, or add an area with + Area.</small></p>
         </div>
@@ -780,6 +804,7 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
     return (
       <div id="chart-container" ref={panelRef} style={panelStyle}>
         {headerContent}
+        {requestErrorContent}
         <div className="chart-placeholder"><p>Loading…</p></div>
         {resizeGrip}
       </div>
@@ -813,6 +838,7 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
     return (
       <div id="chart-container" ref={panelRef} style={panelStyle}>
         {headerContent}
+        {requestErrorContent}
         <div className="chart-placeholder"><p>Loading…</p></div>
         {resizeGrip}
       </div>
@@ -825,6 +851,7 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
     return (
       <div id="chart-container" ref={panelRef} style={panelStyle}>
         {headerContent}
+        {requestErrorContent}
         <div className="chart-placeholder">
           {activeDatasetsForChart.length === 0
             ? <p>No layer here has a time dimension.</p>
@@ -998,6 +1025,7 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
   return (
     <div id="chart-container" ref={panelRef} style={panelStyle}>
       {headerContent}
+        {requestErrorContent}
 
       {/* Display options, folded: what they set still applies, and "(custom)" says so. */}
       {(() => {

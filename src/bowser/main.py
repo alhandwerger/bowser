@@ -912,6 +912,32 @@ def _apply_layer_masks_md(
     return da
 
 
+def _chart_mask_options(primary_mask, mask_min_value, custom_mask_path):
+    """Validate explicit chart options without silently ignoring a requested mask."""
+    if primary_mask and state.mode != "cog":
+        raise HTTPException(422, "Configured masks require GeoTIFF charts")
+    if mask_min_value is not None and (
+        not primary_mask or not np.isfinite(mask_min_value)
+    ):
+        raise HTTPException(422, "A finite primary threshold requires primary_mask=true")
+    if custom_mask_path is not None and not custom_mask_path.strip():
+        raise HTTPException(422, "Custom mask path must not be empty")
+    return {
+        "primary_mask": primary_mask,
+        "mask_min_value": mask_min_value,
+        "custom_mask_path": custom_mask_path,
+    }
+
+
+def _custom_chart_keep(source, path, x, y, radius=None):
+    from .chart_masking import custom_keep  # noqa: PLC0415
+
+    try:
+        return custom_keep(source, path, x, y, radius)
+    except (ValueError, TypeError, OSError) as exc:
+        raise HTTPException(422, "Could not apply the uploaded chart mask") from exc
+
+
 def _get_cog_samples(
     dataset_name: str,
     lon: float,
@@ -920,6 +946,7 @@ def _get_cog_samples(
     *,
     radius: float | None = None,
     time_idx: int | None = None,
+    **mask_options,
 ) -> np.ndarray:
     """Read bounded native chart samples with explicitly aligned GeoTIFF masks."""
     from .cog_sampling import CogSampler, OutsideRasterError  # noqa: PLC0415
@@ -928,7 +955,8 @@ def _get_cog_samples(
         raise HTTPException(status_code=404, detail=f"Dataset {dataset_name} not found")
     try:
         sampler = CogSampler(
-            state.raster_groups[dataset_name], state.raster_groups, layer_masks
+            state.raster_groups[dataset_name], state.raster_groups,
+            layer_masks, **mask_options
         )
         return (
             sampler.point(lon, lat, time_idx)
@@ -1032,6 +1060,7 @@ def _get_point_values(
     lat: float,
     layer_masks: list[dict] | None = None,
     time_idx: int | None = None,
+    **mask_options,
 ) -> np.ndarray:
     """Get point values at lon/lat, with explicit layer masks in either mode.
 
@@ -1046,11 +1075,17 @@ def _get_point_values(
                 status_code=404, detail=f"Variable {dataset_name} not found"
             )
         x, y = state.transformer_from_lonlat.transform(lon, lat)
+        path = mask_options.get("custom_mask_path")
+        keep = (
+            _custom_chart_keep(state.dataset[dataset_name], path, x, y).item()
+            if path else True
+        )
         direct = state.point_dataset()
         if direct is not None and dataset_name in direct.data_vars:
-            return _point_values_direct(
+            values = _point_values_direct(
                 direct, dataset_name, x, y, layer_masks or [], time_idx
             )
+            return np.where(keep, values, np.nan)
         da = state.dataset[dataset_name]
         # Select the single time step before reading so only its chunk is fetched.
         if time_idx is not None:
@@ -1058,10 +1093,11 @@ def _get_point_values(
             if dim is not None:
                 da = da.isel({dim: max(0, min(time_idx, da.sizes[dim] - 1))})
         da = _apply_layer_masks_md(da, layer_masks or [], time_idx=time_idx)
-        return np.atleast_1d(select_point(da, x, y, "nearest").values[..., 0, 0])
+        values = np.atleast_1d(select_point(da, x, y, "nearest").values[..., 0, 0])
+        return np.where(keep, values, np.nan)
     else:  # cog mode
         return _get_cog_samples(
-            dataset_name, lon, lat, layer_masks or [], time_idx=time_idx
+            dataset_name, lon, lat, layer_masks or [], time_idx=time_idx, **mask_options
         )
 
 
@@ -1190,8 +1226,13 @@ def multi_point(
     calculate_trends: bool = Body(False, **api.PARAMS["calculate_trends"]),
     layer_masks: list[dict] = Body([], **api.PARAMS["layer_masks"]),
     ref_buffer_m: float = Body(0.0, **api.PARAMS["ref_buffer_m"]),
+    primary_mask: bool = Body(False),
+    mask_min_value: float | None = Body(None),
+    custom_mask_path: str | None = Body(None),
 ):
     """Fetch time series data for multiple points efficiently."""
+    mask_options = _chart_mask_options(primary_mask, mask_min_value, custom_mask_path)
+
     # Get time values based on data mode
     if state.mode == "md":
         if dataset_name not in state.dataset.data_vars:
@@ -1239,6 +1280,7 @@ def multi_point(
                 float(lon),  # type: ignore[arg-type]
                 float(lat),  # type: ignore[arg-type]
                 layer_masks,
+                **mask_options,
             )
 
             # Apply reference subtraction if provided
@@ -1605,8 +1647,13 @@ def buffer_timeseries(
     ref_lat: Optional[float] = Body(None, **api.PARAMS["ref_lat"]),
     layer_masks: list[dict] = Body([], **api.PARAMS["layer_masks"]),
     ref_buffer_m: float = Body(0.0, **api.PARAMS["ref_buffer_m"]),
+    primary_mask: bool = Body(False),
+    mask_min_value: float | None = Body(None),
+    custom_mask_path: str | None = Body(None),
 ):
     """Collect all pixels within a circular buffer, return median + random samples."""
+    mask_options = _chart_mask_options(primary_mask, mask_min_value, custom_mask_path)
+
     if state.mode == "md":
         if dataset_name not in state.dataset.data_vars:
             raise HTTPException(
@@ -1624,6 +1671,10 @@ def buffer_timeseries(
         cx, cy = tr.transform(lon, lat)
 
         # The same circle a buffered reference selects (see _get_ref_median).
+        keep = (
+            _custom_chart_keep(da, custom_mask_path, cx, cy, buffer_m)
+            if custom_mask_path else None
+        )
         circle = select_circle(
             da, cx, cy, buffer_m, margin_window=True, sqrt_distance=True
         )
@@ -1631,6 +1682,10 @@ def buffer_timeseries(
             raise HTTPException(status_code=404, detail="Buffer outside dataset extent")
         # (time, n_pixels), NaN outside the circle; (1, n_pixels) for a 2-D layer.
         flat = pool(*circle)
+        if keep is not None:
+            if keep.shape != circle.inside.shape:
+                raise HTTPException(422, "Uploaded mask window does not match data")
+            flat = np.where(keep.reshape(1, -1), flat, np.nan)
 
         # Reference subtraction (use buffer median when ref_buffer_m > 0)
         if ref_lon is not None and ref_lat is not None:
@@ -1652,7 +1707,7 @@ def buffer_timeseries(
         x_values = rg.x_values
 
         flat = _get_cog_samples(
-            dataset_name, lon, lat, layer_masks, radius=buffer_m
+            dataset_name, lon, lat, layer_masks, radius=buffer_m, **mask_options
         )
         if ref_lon is not None and ref_lat is not None:
             ref_vals = _get_ref_median(
@@ -2839,7 +2894,7 @@ def _build_masked_cog_dataarray(
         ):
             m = m.rio.reproject_match(da_)
         if inclusive:
-            return da_.where(m >= thr)
+            return da_.where(np.isfinite(m) & (m != 0) & (m >= thr))
         keep = m <= thr if mode == "max" else m > thr
         return da_.where(np.isfinite(m) & keep)
 
