@@ -8,6 +8,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Optional synchronized native-pixel histories in raster GIFs. Point samples
+  stay native under cropped/pyramid displays; preflight includes point/reference
+  work and plot height. See [docs/raster-animation.md](docs/raster-animation.md).
+
 - Bounded raster GIF export on the full server, with date labels, saved color
   limits, native-reference offsets, shared export masks, cropped reads and
   existing display pyramids/overviews. Metadata-only preflight, elapsed time
