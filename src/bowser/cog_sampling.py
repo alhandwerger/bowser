@@ -10,11 +10,12 @@ from pyproj import CRS, Transformer
 from rasterio.transform import rowcol
 from rasterio.windows import Window
 
+from .mask_alignment import mask_operator, numpy_mask_condition, validate_mask_threshold
 from .polygon import MAX_PIXEL_EPOCHS, MAX_WINDOW_PIXELS, NativeGrid, _linear, _values
 
 
 def _mask_specs(masks: list[dict]) -> list[dict]:
-    """Validate existing signed chart-mask fields without importing GeoZarr IO."""
+    """Validate chart-mask fields and the bounded number of requested masks."""
     if not isinstance(masks, list) or len(masks) > 10:
         raise ValueError("Chart masks must be a list of at most ten masks")
     result = []
@@ -29,8 +30,7 @@ def _mask_specs(masks: list[dict]) -> list[dict]:
         except (TypeError, ValueError) as exc:
             raise ValueError("Mask thresholds must be finite numbers") from exc
         mode = mask.get("mode", "min")
-        if not np.isfinite(threshold) or mode not in ("min", "max"):
-            raise ValueError("Masks require finite thresholds and min/max mode")
+        validate_mask_threshold(mode, threshold)
         result.append({"dataset": name, "threshold": threshold, "mode": mode})
     return result
 
@@ -121,7 +121,9 @@ class CogSampler:
             mask = self._read(
                 paths[0 if len(paths) == 1 else index], window, nodata, mask=True
             )
-            comparison = mask <= threshold if mode == "max" else mask > threshold
+            comparison = numpy_mask_condition(
+                mask, threshold, mask_operator(mode, inclusive_min=False)
+            )
             keep &= np.isfinite(mask) & comparison
         return np.where(keep, values, np.nan)
 

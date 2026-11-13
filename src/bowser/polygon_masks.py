@@ -13,12 +13,14 @@ import numpy as np
 from pyproj import CRS
 from pyproj.exceptions import CRSError
 
+from .mask_alignment import mask_operator, numpy_mask_condition
 from .polygon import STORED_WARNING, NativeGrid, _linear, _values
 
 if TYPE_CHECKING:
     import xarray as xr
 
-    from .polygon import PolygonRequest
+    from .mask_alignment import mask_operator, numpy_mask_condition
+from .polygon import PolygonRequest
 
 Reader = Callable[[int, slice, slice], np.ndarray]
 
@@ -44,10 +46,7 @@ class PolygonMasks:
             mask = read(index, rows, cols)
             if mask.shape != shape:
                 raise ValueError("Mask window must match the native data window")
-            compare = {">": np.greater, ">=": np.greater_equal, "<=": np.less_equal}[
-                record["operator"]
-            ]
-            keep &= np.isfinite(mask) & compare(mask, record["threshold"])
+            keep &= numpy_mask_condition(mask, record["threshold"], record["operator"])
         return keep
 
     def apply(
@@ -175,7 +174,7 @@ def xarray_masks(
             {
                 "dataset": spec.dataset,
                 "threshold": spec.threshold,
-                "operator": ">=" if spec.mode == "min" else "<=",
+                "operator": mask_operator(spec.mode),
                 "temporal_support": "matching_axis" if dim else "static",
             }
         )
@@ -239,7 +238,7 @@ def raster_masks(
             {
                 "dataset": spec.dataset,
                 "threshold": spec.threshold,
-                "operator": "<=" if spec.mode == "max" else ">",
+                "operator": mask_operator(spec.mode, inclusive_min=False),
                 "temporal_support": "matching_axis" if len(paths) > 1 else "static",
             }
         )

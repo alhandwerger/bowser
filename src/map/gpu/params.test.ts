@@ -87,3 +87,11 @@ describe('colormap textures', () => {
     for (let i = 3; i < 1024; i += 4) expect(rdbu[i]).toBe(255);
   });
 });
+
+for (const mode of ['abs_min', 'abs_max', 'unknown']) {
+  it(`uses server tiles instead of misinterpreting ${mode} as min`, () => {
+    const result = gpuParamsFromTileQuery(query({ layerMasks: [{ dataset: 'quality', threshold: 5, mode }] }), 'md');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('server-rendered');
+  });
+}
