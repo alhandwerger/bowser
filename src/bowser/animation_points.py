@@ -40,15 +40,23 @@ def elapsed_times(labels):
 
 def locate_points(da, points):
     """Containing native pixel; no interpolation, clamping or averaging."""
+    return locate_grid_points(
+        (da.rio.crs, da.rio.transform(), da.sizes["x"], da.sizes["y"]), points
+    )
+
+
+def locate_grid_points(grid, points):
+    """Locate native pixel centers from grid metadata without reading pixels."""
     from pyproj import Transformer
 
-    transformer = Transformer.from_crs(4326, da.rio.crs, always_xy=True)
-    inverse = ~da.rio.transform()
+    crs, transform, width, height = grid
+    transformer = Transformer.from_crs(4326, crs, always_xy=True)
+    inverse = ~transform
     records = []
     for point in points:
         x, y = transformer.transform(point.lon, point.lat)
         col, row = inverse * (x, y)
-        if not (0 <= row < da.sizes["y"] and 0 <= col < da.sizes["x"]):
+        if not (0 <= row < height and 0 <= col < width):
             raise ValueError("Animation point is outside the native source grid")
         records.append(
             {**point.model_dump(), "row": int(row), "col": int(col), "values": []}
