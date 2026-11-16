@@ -1,3 +1,4 @@
+import { registerAnimationContext, captureLeafletContext } from '../map/animationContext';
 import { useEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import { MapContainer as LeafletMapContainer, TileLayer, WMSTileLayer, Marker, useMapEvents, useMap } from 'react-leaflet';
@@ -602,6 +603,12 @@ function OverlayLayers() {
   );
 }
 
+function AnimationContextBridge() {
+  const map=useMap(); const { state }=useAppContext();
+  useEffect(() => registerAnimationContext(signal => captureLeafletContext(map,state.splitScreen,signal)), [map,state.splitScreen]);
+  return null;
+}
+
 export default function MapContainer({ toolbarsVisible, onToggleToolbars }: { toolbarsVisible: boolean; onToggleToolbars: () => void }) {
   const { state } = useAppContext();
 
@@ -693,6 +700,7 @@ export default function MapContainer({ toolbarsVisible, onToggleToolbars }: { to
           eventHandlers={{ tileloadstart: onTileStart, tileload: onTileEnd, tileerror: onTileEnd }}
         />
       )}
+      <AnimationContextBridge />
       <OverlayLayers />
       <SplitScreenControl />
       <RasterTileLayer

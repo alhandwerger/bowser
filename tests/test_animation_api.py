@@ -116,6 +116,33 @@ def exercise(work, mode):
         )
         np.testing.assert_array_equal(pixel, expected)
     # Mask all dates: no missing observations become zero; labels still retain
+    # Existing map conventions, including invalid zero mask flags and valid zero data.
+    external = ds.quality.isel(time=0).copy()
+    external.values[:] = 1
+    external.values[0, 1] = external.values[1, 1] = 0
+    external.rio.to_raster(work / "external.tif")
+    extra = client.post(
+        "/export/animation",
+        json={**body, "custom_mask_path": str(work / "external.tif")},
+    )
+    assert extra.status_code == 200, extra.text[:300]
+    with Image.open(io.BytesIO(extra.content)) as masked:
+        assert json.loads(masked.info["comment"])["valid_native_pixels"] == [13, 12, 13]
+    if mode == "cog":
+        main._default_state.raster_groups["displacement"].mask_file_list = [
+            str(work / "external.tif")
+        ]
+        configured = client.post(
+            "/export/animation", json={**body, "mask_min_value": 0}
+        )
+        assert configured.status_code == 200, configured.text[:300]
+        with Image.open(io.BytesIO(configured.content)) as masked:
+            assert json.loads(masked.info["comment"])["valid_native_pixels"] == [
+                13,
+                12,
+                13,
+            ]
+        main._default_state.raster_groups["displacement"].mask_file_list = []
     # three separate saved frames instead of GIF coalescing an empty image.
     empty = client.post(
         "/export/animation",

@@ -8,6 +8,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Optional raster GIF backgrounds with opacity, source attribution and text
+  annotations in Leaflet and MapLibre. Backgrounds are bounded display snapshots,
+  never changes to measurements. Configured/uploaded masks apply to GIFs with
+  bounded reads and strict failure handling.
+
 - Full-server polygon summaries and pixel previews now honor explicitly requested
   configured/uploaded masks with bounded native reads and no unmasked fallback.
 

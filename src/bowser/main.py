@@ -1580,7 +1580,9 @@ def polygon_timeseries(
                 raise ValueError("Source supports at most one non-spatial axis")
             dim = extra[0] if extra else None
             labels = _dim_labels(source, dim) if dim else ["Stored layer"]
-            result = summarize_xarray(source, body, labels, mask_dataset=target.dataset, external_masks=True)
+            result = summarize_xarray(
+                source, body, labels, mask_dataset=target.dataset, external_masks=True
+            )
         else:
             result = summarize_rasters(
                 target.raster_groups[body.variable],
@@ -2905,6 +2907,7 @@ def _build_masked_md_dataarray(
     *,
     strict_masks: bool = False,
     ref_time_idx: Optional[int] = None,
+    bounded_masks: bool = False,
 ) -> "xr.DataArray":
     """Build the masked 2-D/3-D DataArray for ``variable`` from a GeoZarr ``ds``.
 
@@ -2961,7 +2964,27 @@ def _build_masked_md_dataarray(
     # Custom mask (uploaded GeoTIFF) — reproject to match da
     if custom_mask_path and (strict_masks or Path(custom_mask_path).exists()):
         try:
-            da = da.where(_custom_mask_on(da, custom_mask_path))
+            if bounded_masks:
+                from .polygon import NativeGrid
+                from .polygon_external_masks import attach_mask
+                from .polygon_masks import PolygonMasks
+
+                masks = PolygonMasks()
+                grid = NativeGrid(
+                    da.rio.crs, da.rio.transform(), da.sizes["x"], da.sizes["y"]
+                )
+                attach_mask(masks, [custom_mask_path], grid, 0.0, ">", primary=False)
+                keep = masks.valid(
+                    0,
+                    slice(0, grid.height),
+                    slice(0, grid.width),
+                    (grid.height, grid.width),
+                )
+                da = da.where(
+                    xr.DataArray(keep, dims=("y", "x"), coords={"y": da.y, "x": da.x})
+                )
+            else:
+                da = da.where(_custom_mask_on(da, custom_mask_path))
         except Exception as exc:
             if strict_masks:
                 raise HTTPException(
@@ -3030,7 +3053,7 @@ def _build_masked_cog_dataarray(
                 values = vrt.read(1, masked=True).astype(float).filled(np.nan)
             m = xr.DataArray(values, dims=("y", "x"), coords={"y": da_.y, "x": da_.x})
             if inclusive:
-                return da_.where(m >= thr)
+                return da_.where(np.isfinite(m) & (m != 0) & (m >= thr))
             return da_.where(np.isfinite(m) & (m <= thr if mode == "max" else m > thr))
         m = rxr.open_rasterio(path, masked=True).squeeze("band", drop=True)
         if (
@@ -3434,6 +3457,7 @@ def _prepare_native_export(
             custom_mask_path,
             strict_masks=True,
             ref_time_idx=None if ref_step is None else ref_step["index"],
+            bounded_masks=display_dataset is not None,
         )
         fallback_crs = target.dataset.rio.crs
     else:  # cog
@@ -3628,7 +3652,7 @@ def export_animation(body: AnimationRequest, dataset: str | None = Query(None)):
                 dataset,
                 index,
                 None,
-                None,
+                body.mask_min_value,
                 masks,
                 body.custom_mask_path,
                 body.ref_lon,
