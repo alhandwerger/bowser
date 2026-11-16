@@ -14,6 +14,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Absolute-value layer masks (`|value| ≤` and `|value| ≥`) across native
   display, analysis and export paths, preserving measurement signs and nodata.
   See [docs/absolute-value-masks.md](docs/absolute-value-masks.md).
+- Optional bounded vector outlines in raster GIFs, including polygon holes.
+  Geometry-only annotations leave measurements, masks and native point histories
+  unchanged. See [docs/raster-animation.md](docs/raster-animation.md).
 
 - Configured and uploaded masks in full-server point/radius chart requests,
   including bounded native reads, per-layer configured thresholds and clear
