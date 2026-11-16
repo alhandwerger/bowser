@@ -8,6 +8,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Choose source layers when importing small multi-layer converted vector files.
+  Only confirmed features enter the map and analysis; originals are preserved.
+
 - Opt-in, bounded individual pixel histories in area charts. Sample or request
   all eligible pixels within response limits; preserve full-polygon summaries,
   native gaps and existing reference transformations. Off by default.
