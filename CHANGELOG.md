@@ -59,6 +59,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shows it separately; fits, residuals, polygon statistics and numeric exports
   use the measured epochs. Genuine zero measurements are retained. See
   [the response contract](docs/display-datum.md).
+- **Imported GeoJSON keeps feature IDs.** Unique source IDs keep polygon selections
+  and chart colors attached after feature reordering. Explicit source-layer
+  provenance distinguishes repeated IDs across combined layers; missing or
+  ambiguous IDs retain index-based behavior. Projects preserve these source
+  records. See [imported feature identity](docs/vector-feature-identity.md).
 
 - Static configured GeoTIFF masks now remain on the map at every date.
 - Native GeoTIFF exports now reject configured-mask zero even at a zero

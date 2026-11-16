@@ -8,6 +8,8 @@
  * date shifts the median, mean and every percentile by that number; the spread is unchanged.
  */
 import { datumMarker, type DisplayDatum } from './displayDatum';
+import { DRAWINGS_ID } from '../map/overlays';
+import { featureSources, featureSourceKey } from '../map/featureIdentity';
 import type { ChartArea, LayerMask, Overlay } from '../types';
 
 import { AREA_PERCENTILES, areaRows, type AreaRow } from './areaStats';
@@ -96,16 +98,17 @@ export function polygonChoices(overlays: Overlay[]): PolygonChoice[] {
   const out: PolygonChoice[] = [];
   for (const o of overlays) {
     if (o.type !== 'vector' || !o.data) continue;
+    const sources = featureSources(o.id, o.name, o.data, o.id !== DRAWINGS_ID);
     let n = 0;
     (o.data.features as GeoJsonFeature[]).forEach((f, i) => {
       const g = f?.geometry;
       if (!g || !isPolygon(g)) return;
       n += 1;
       out.push({
-        key: `${o.id}:${i}`,
+        key: featureSourceKey(sources[i]),
         name: featureName(f.properties, `${o.name} ${n}`),
         geometry: { type: g.type as 'Polygon' | 'MultiPolygon', coordinates: g.coordinates },
-        source: { overlayId: o.id, layer: o.name, index: i },
+        source: sources[i],
       });
     });
   }
@@ -116,12 +119,13 @@ export function polygonChoices(overlays: Overlay[]): PolygonChoice[] {
 export function pointChoices(o: Overlay): PointChoice[] {
   if (o.type !== 'vector' || !o.data) return [];
   const out: PointChoice[] = [];
+  const sources = featureSources(o.id, o.name, o.data, o.id !== DRAWINGS_ID);
   (o.data.features as GeoJsonFeature[]).forEach((f, i) => {
     if (!isPoint(f?.geometry)) return;
     const [lon, lat] = f.geometry!.coordinates as number[];
     out.push({
-      key: `${o.id}:${i}`, name: featureName(f.properties, `${o.name} ${out.length + 1}`), position: [lat, lon],
-      source: { overlayId: o.id, layer: o.name, index: i },
+      key: featureSourceKey(sources[i]), name: featureName(f.properties, `${o.name} ${out.length + 1}`), position: [lat, lon],
+      source: sources[i],
     });
   });
   return out;
