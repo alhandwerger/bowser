@@ -8,6 +8,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Opt-in, bounded individual pixel histories in area charts. Sample or request
+  all eligible pixels within response limits; preserve full-polygon summaries,
+  native gaps and existing reference transformations. Off by default.
+
 - Configured and uploaded masks in full-server point/radius chart requests,
   including bounded native reads, per-layer configured thresholds and clear
   unsupported/error handling. Shared named-mask and reference policies remain
