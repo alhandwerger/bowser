@@ -49,6 +49,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Chart-to-map date selection preserves both dates of a pair and does not jump
+  to another pair with the same end date. Ambiguous selections leave the map unchanged.
+
 - Static configured GeoTIFF masks now remain on the map at every date.
 - Native GeoTIFF exports now reject configured-mask zero even at a zero
   threshold, matching the map. Valid zero displacement remains a measurement.
