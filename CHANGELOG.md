@@ -54,6 +54,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Chart-to-map date selection preserves both dates of a pair and does not jump
   to another pair with the same end date. Ambiguous selections leave the map unchanged.
+- **Defined reference-date zeros stay out of numerical analysis.** When a producer
+  explicitly marks a display datum as not an independent observation, the chart
+  shows it separately; fits, residuals, polygon statistics and numeric exports
+  use the measured epochs. Genuine zero measurements are retained. See
+  [the response contract](docs/display-datum.md).
 
 - Static configured GeoTIFF masks now remain on the map at every date.
 - Native GeoTIFF exports now reject configured-mask zero even at a zero

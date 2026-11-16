@@ -1,6 +1,7 @@
 import type { ChartMaskOptions } from '../utils/chartMasks';
 import { useCallback } from 'react';
 import type { PixelPreviewOptions } from '../utils/polygonPixelPreview';
+import { pointObservations, bufferObservations, polygonObservations } from '../utils/displayDatum';
 import { MultiPointTimeSeriesData, LayerMask, ChartArea } from '../types';
 import { polygonErrorMessage, polygonRequestBody, type PolygonTimeSeries } from '../utils/polygonSeries';
 
@@ -126,7 +127,7 @@ export function useApi() {
         body: JSON.stringify(payload),
       });
       if (!response.ok) return undefined;
-      return await response.json();
+      return pointObservations(await response.json());
     } catch (error) {
       console.error('Error fetching multi-point time series:', error);
       return undefined;
@@ -205,7 +206,7 @@ export function useApi() {
         }),
       });
       if (!response.ok) return undefined;
-      return await response.json();
+      return bufferObservations(await response.json());
     } catch (error) {
       console.error('Error fetching buffer time series:', error);
       return undefined;
@@ -233,7 +234,7 @@ export function useApi() {
       if (layerMasks.length && body?.optional_masks_applied !== true) {
         return { error: 'The server did not confirm the requested polygon masks; no unmasked curve is shown.' };
       }
-      return { data: body as PolygonTimeSeries };
+      return { data: polygonObservations(body as PolygonTimeSeries) };
     } catch (error) {
       if (signal?.aborted) return { error: 'request superseded' };
       console.error('Error fetching polygon statistics:', error);

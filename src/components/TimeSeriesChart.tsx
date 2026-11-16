@@ -1,6 +1,8 @@
 import PolygonPixelControls from './PolygonPixelControls';
 import { usePolygonPixelPreview } from '../hooks/usePolygonPixelPreview';
 import { pixelPreviewDatasets } from '../utils/polygonPixelPreview';
+import { datumMarker, type DisplayDatum } from '../utils/displayDatum';
+
 import { chartMaskOptions } from '../utils/chartMasks';
 import { useUploadedChartMaskSupport } from '../hooks/useUploadedChartMaskSupport';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
@@ -94,6 +96,7 @@ function useThemeVersion(): number {
 /** Which part of an area a dataset of areaChartDatasets draws. */
 function areaRole(d: Record<string, unknown>): SeriesTag['role'] {
   if (d._pixelCurve) return 'sample';
+  if (d._datum) return 'datum';
   const label = String(d.label ?? '');
   if (d.fill === '+1') return 'band_upper';
   if (label.endsWith(' median')) return 'area_median';
@@ -102,6 +105,7 @@ function areaRole(d: Record<string, unknown>): SeriesTag['role'] {
 }
 
 interface BufferResult {
+  displayDatum?: DisplayDatum;
   warnings?: string[];
   labels: string[];
   median: Array<{ x: string; y: number }>;
@@ -470,8 +474,10 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
       return byLabel[t]?.[key]?.toString() ?? '';
     })]);
 
+    const datumNotes = [...new Set(allDatasets.flatMap(d => d.displayDatum
+      ? [`# Display datum ${d.displayDatum.x}: defined zero, not an independent observation; excluded from numeric rows and fits.`] : []))];
     const csvContent = [
-      ...metaRows, '',                       // metadata (commented), then a blank line
+      ...datumNotes, ...metaRows, '',                       // metadata (commented), then a blank line
       [headers, ...rows].map(r => r.join(',')).join('\n'),
     ].join('\n');
     // Prepend the metadata column header before the metadata rows.
@@ -595,6 +601,7 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
                 .map((ds: any, index: number) => ({ ds, index }))
                 .filter(({ ds }: any) => {
                   if (ds._pixelCurve) return false;
+                  if (ds._datum) return false;
                   // An area: one entry each for its median, mean and band.
                   if (ds._area) return !!ds._legend;
                   if (ds.label.includes(' sample ')) return false;
@@ -928,8 +935,15 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
   // ── Build unified dataset list from all active chart datasets ─────────────
   // Collect all ISO dates across all datasets (points and areas) for the x-axis
   const allIsoLabels = [...new Set([
-    ...Object.values(chartDataMap).flatMap(cd => cd.labels.map(toIsoDate)),
+    ...Object.entries(chartDataMap).flatMap(([ds, cd]) => [
+      ...cd.labels.map(toIsoDate),
+      ...(ds in refX ? [] : cd.datasets.flatMap(d => {
+        const datum = state.bufferEnabled ? bufferData[`${ds}::${d.pointId}`]?.displayDatum : d.displayDatum;
+        return datum ? [toIsoDate(datum.x)] : [];
+      })),
+    ]),
     ...areaDsNames.flatMap(ds => visibleAreas.flatMap(a => areaResults[areaStatsKey(ds, a.id)]?.data?.labels.map(toIsoDate) ?? [])),
+    ...areaDatasets.filter(d => d._datum).flatMap(d => (d.data as { x: string }[]).map(p => p.x)),
   ])].sort();
 
   const isoLabels = allIsoLabels.filter(d => {
@@ -971,6 +985,15 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
       const look = seriesStyle(point?.marker, point?.line, ms);
       const tag = (role: SeriesTag['role']): SeriesTag => ({ kind: 'point', id: dataset.pointId, name, layer: dsName, role });
 
+      const datum = state.bufferEnabled ? bufferData[`${dsName}::${dataset.pointId}`]?.displayDatum : dataset.displayDatum;
+      if (datum && !(dsName in refX)) {
+        const x = toIsoDate(datum.x);
+        const t = Date.parse(x);
+        if (t >= dateStart && t <= dateEnd) datasetList.push({
+          ...datumMarker({ ...datum, x }, borderColor), label: `${baseLabel} reference datum`,
+          _series: tag('datum'), _unit: unit, yAxisID,
+        });
+      }
       if (state.bufferEnabled) {
         const buf = bufferData[`${dsName}::${dataset.pointId}`];
         if (!buf) return;
