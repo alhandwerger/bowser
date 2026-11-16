@@ -8,6 +8,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Full-server polygon summaries and pixel previews now honor explicitly requested
+  configured/uploaded masks with bounded native reads and no unmasked fallback.
+
 - Choose source layers when importing small multi-layer converted vector files.
   Only confirmed features enter the map and analysis; originals are preserved.
 

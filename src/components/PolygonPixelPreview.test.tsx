@@ -20,7 +20,7 @@ const labels = ['2026-01-01', '2026-01-13', '2026-01-25'];
 const geometry = { type: 'Polygon' as const, coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] };
 const layer: RasterGroup = { name: 'displacement', unit: 'meters', file_list: [], mask_file_list: [], mask_min_value: 0,
   nodata: null, uses_spatial_ref: true, algorithm: 'shift', x_values: labels, latlon_bounds: [0, 0, 1, 1], available_mask_vars: [] };
-type Body = { curve_mode?: 'sample' | 'all'; sample_count?: number; layer_masks?: unknown[]; support: string };
+type Body = { custom_mask_path?: string; curve_mode?: 'sample' | 'all'; sample_count?: number; layer_masks?: unknown[]; support: string };
 let posted: { body: Body; signal?: AbortSignal | null }[];
 let answerPreview: (body: Body) => Promise<Response>;
 let dispatch: (action: AppAction) => void;
@@ -93,6 +93,15 @@ describe('polygon pixel controls', () => {
     choose('none');
     await waitFor(() => expect(pixels()).toHaveLength(0));
     expect(medians()).toEqual([0, 6, 12]);
+  });
+  it('forwards an uploaded mask to previews and clears them if confirmation is missing', async () => {
+    await show(); choose('sample'); await waitFor(() => expect(pixels()).toHaveLength(2));
+    change({ type: 'SET_CUSTOM_MASK_PATH', payload: 'uploaded-mask.tif' });
+    await waitFor(() => expect(requests()[requests().length - 1].body.custom_mask_path).toBe('uploaded-mask.tif'));
+    await waitFor(() => expect(screen.getAllByText(/did not confirm every requested polygon mask/).length).toBeGreaterThan(0));
+    expect(pixels()).toHaveLength(0);
+    change({ type: 'SET_CUSTOM_MASK_PATH', payload: null });
+    await waitFor(() => expect(pixels()).toHaveLength(2));
   });
   it('reuses native curves when references, baseline dates and display ranges change', async () => {
     await show(); choose('sample');

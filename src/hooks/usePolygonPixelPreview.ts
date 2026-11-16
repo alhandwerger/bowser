@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ChartArea, LayerMask, RasterGroup } from '../types';
 import { useApi } from './useApi';
 import { useSpacedEffect, REQUEST_GAP_MS } from './useSpacedEffect';
+import { chartMaskOptions, type ChartMaskOptions } from '../utils/chartMasks';
 import { applicableMasks } from '../utils/maskCompatibility';
 import { checkedPixelPreview, type PixelPreview, type PixelPreviewOptions } from '../utils/polygonPixelPreview';
 
 export interface PixelPreviewSelection extends PixelPreviewOptions { areaId: string; dataset: string }
 interface Props { areas: ChartArea[]; layers: string[]; layerMasks: LayerMask[];
-  datasetInfo: Record<string, RasterGroup>; revision: number; enabled: boolean }
+  datasetInfo: Record<string, RasterGroup>; revision: number; enabled: boolean; customMaskPath: string | null; dataMode: string }
 interface Reply { key: string; data?: PixelPreview; error?: string }
 
 /** One opt-in preview per window. References/display dates reuse stored values, never refetch. */
@@ -18,16 +19,16 @@ export function usePolygonPixelPreview(p: Props) {
   const area = p.areas.find(a => a.id === selection?.areaId);
   const validSelection = area && selection && p.layers.includes(selection.dataset) ? selection : null;
   const key = p.enabled && validSelection ? JSON.stringify({
-    ...validSelection, geometry: area!.geometry, revision: p.revision,
+    ...validSelection, external: chartMaskOptions(p, validSelection.dataset), geometry: area!.geometry, revision: p.revision,
     masks: applicableMasks(p.datasetInfo[validSelection.dataset], p.layerMasks),
   }) : '';
-  const request = useMemo(() => key ? JSON.parse(key) as PixelPreviewSelection & { geometry: ChartArea['geometry']; masks: LayerMask[] } : null, [key]);
+  const request = useMemo(() => key ? JSON.parse(key) as PixelPreviewSelection & { geometry: ChartArea['geometry']; masks: LayerMask[]; external: ChartMaskOptions } : null, [key]);
   useEffect(() => { if (selection && !validSelection) setSelection(null); }, [selection, validSelection]);
   useSpacedEffect(() => {
     if (!request) return;
     const controller = new AbortController();
     let live = true;
-    const options = { curve_mode: request.curve_mode, sample_count: request.sample_count };
+    const options = { ...request.external, curve_mode: request.curve_mode, sample_count: request.sample_count };
     if (!Number.isInteger(options.sample_count) || options.sample_count < 1 || options.sample_count > 500) {
       setReply({ key, error: 'Choose a sample size from 1 to 500.' });
       return;

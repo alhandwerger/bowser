@@ -499,7 +499,7 @@ export default function TimeSeriesChart({ windowId }: { windowId: string }) {
   // Ordered list of dataset names in the chart (one y axis each)
   const activeChartDs = [...new Set([...Object.keys(chartDataMap), ...areaDsNames])];
   const pixels = usePolygonPixelPreview({ areas: visibleAreas, layers: activeDatasetsForChart,
-    layerMasks: state.layerMasks, datasetInfo: state.datasetInfo, revision: state.areaStatsRevision, enabled: state.showChart });
+    layerMasks: state.layerMasks, datasetInfo: state.datasetInfo, revision: state.areaStatsRevision, enabled: state.showChart, customMaskPath: state.customMaskPath, dataMode: state.dataMode });
   const previewSummary = pixels.selection ? areaResults[areaStatsKey(pixels.selection.dataset, pixels.selection.areaId)]?.data : undefined;
   const pixelLabelsMismatch = !!pixels.data && !!previewSummary && JSON.stringify(pixels.data.labels) !== JSON.stringify(previewSummary.labels);
 
