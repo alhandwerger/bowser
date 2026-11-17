@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import RefPointChart from './RefPointChart';
 
@@ -60,4 +60,60 @@ describe('reference area preview', () => {
     await act(async () => resolve({ ...reply, median: series([90, 90, 90]) }));
     expect(curve('Median')).toEqual([0, 2, 4]);
   });
+});
+
+
+describe('optional quality-screened reference diagnostic', () => {
+  it('is opt-in, forwards external masks without a reference shift and restores the raw preview', async () => {
+    ctx.state = { ...ctx.state, dataMode: 'cog', customMaskPath: 'mask.tif',
+      layerMasks: [], datasetInfo: { displacement: { x_values: dates, mask_file_list: ['quality.tif'], mask_min_value: 0 } } };
+    const originalPosition = ctx.state.refMarkerPosition;
+    render(<RefPointChart />);
+    await screen.findByTestId('chart');
+    expect(ctx.fetch).toHaveBeenLastCalledWith(2, 1, 'displacement', 15, 20);
+    ctx.fetch.mockResolvedValue({ ...reply, median: series([0, 1, 2]) });
+    fireEvent.click(screen.getByRole('checkbox'));
+    await waitFor(() => expect(curve('Median')).toEqual([0, 1, 2]));
+    expect(ctx.fetch).toHaveBeenLastCalledWith(2, 1, 'displacement', 15, 20,
+      undefined, undefined, [], 0, { primary_mask: true, mask_min_value: 0, custom_mask_path: 'mask.tif' });
+    expect(ctx.state.refMarkerPosition).toBe(originalPosition);
+    expect(screen.getByText(/does not change the map reference/)).toBeTruthy();
+    ctx.fetch.mockResolvedValue(reply);
+    fireEvent.click(screen.getByRole('checkbox'));
+    await waitFor(() => expect(curve('Median')).toEqual([0, 2, 4]));
+    expect(ctx.fetch).toHaveBeenLastCalledWith(2, 1, 'displacement', 15, 20);
+  });
+  it('clears failed screened results and leaves the raw-mode control available', async () => {
+    render(<RefPointChart />); await screen.findByTestId('chart');
+    ctx.fetch.mockResolvedValue(undefined);
+    fireEvent.click(screen.getByRole('checkbox'));
+    await screen.findByRole('alert');
+    expect(screen.queryByTestId('chart')).toBeNull();
+    ctx.fetch.mockResolvedValue(reply);
+    fireEvent.click(screen.getByRole('checkbox'));
+    await screen.findByTestId('chart');
+    expect(curve('Median')).toEqual([0, 2, 4]);
+  });
+  it('discards late screened replies after returning to raw mode', async () => {
+    render(<RefPointChart />); await screen.findByTestId('chart');
+    let finish!: (value: typeof reply) => void;
+    ctx.fetch.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    fireEvent.click(screen.getByRole('checkbox'));
+    await waitFor(() => expect(finish).toBeTypeOf('function'));
+    fireEvent.click(screen.getByRole('checkbox'));
+    await screen.findByTestId('chart');
+    await act(async () => finish({ ...reply, median: series([99, 99, 99]) }));
+    expect(curve('Median')).toEqual([0, 2, 4]);
+  });
+});
+
+
+it('refreshes the screened diagnostic when mask settings change', async () => {
+  const view = render(<RefPointChart />); await screen.findByTestId('chart');
+  fireEvent.click(screen.getByRole('checkbox'));
+  await screen.findByTestId('chart');
+  ctx.state = { ...ctx.state, customMaskPath: 'replacement.tif', dataMode: 'md' };
+  view.rerender(<RefPointChart />);
+  await waitFor(() => expect(ctx.fetch).toHaveBeenLastCalledWith(2, 1, 'displacement', 15, 20,
+    undefined, undefined, [], 0, { custom_mask_path: 'replacement.tif' }));
 });

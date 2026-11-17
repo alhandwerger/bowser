@@ -1,8 +1,11 @@
-import { useEffect, useState, useRef } from 'react';
+import { useState, useRef } from 'react';
 import { Line } from 'react-chartjs-2';
 import { useAppFields } from '../context/AppContext';
+import { useSpacedEffect, REQUEST_GAP_MS } from '../hooks/useSpacedEffect';
 import { useApi } from '../hooks/useApi';
 import { useDraggableResizable } from '../hooks/useDraggableResizable';
+import { applicableMasks } from '../utils/maskCompatibility';
+import { chartMaskOptions } from '../utils/chartMasks';
 import { chartLayerFor } from '../utils/chartLayers';
 
 interface BufferResult {
@@ -13,8 +16,9 @@ interface BufferResult {
 }
 
 export default function RefPointChart() {
-  const state = useAppFields('currentDataset', 'datasetInfo', 'refBufferEnabled', 'refBufferRadius', 'refMarkerPosition', 'showRefChart');
+  const state = useAppFields('layerMasks', 'customMaskPath', 'dataMode', 'currentDataset', 'datasetInfo', 'refBufferEnabled', 'refBufferRadius', 'refMarkerPosition', 'showRefChart');
   const { fetchBufferTimeSeries } = useApi();
+  const [screened, setScreened] = useState(false);
   const [bufferData, setBufferData] = useState<BufferResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +32,7 @@ export default function RefPointChart() {
 
   const chartDs = chartLayerFor(state.currentDataset, state.datasetInfo);
 
-  useEffect(() => {
+  useSpacedEffect(() => {
     if (!state.refBufferEnabled || !state.showRefChart || !chartDs) {
       setBufferData(null);
       setError(null);
@@ -45,7 +49,12 @@ export default function RefPointChart() {
     setLoading(true);
     setBufferData(null);
     setError(null);
-    fetchBufferTimeSeries(lng, lat, chartDs, state.refBufferRadius, 20)
+    const request = screened
+      ? fetchBufferTimeSeries(lng, lat, chartDs, state.refBufferRadius, 20,
+        undefined, undefined, applicableMasks(state.datasetInfo[chartDs], state.layerMasks ?? []),
+        0, chartMaskOptions({ dataMode: state.dataMode, datasetInfo: state.datasetInfo, customMaskPath: state.customMaskPath }, chartDs))
+      : fetchBufferTimeSeries(lng, lat, chartDs, state.refBufferRadius, 20);
+    request
       .then(data => {
         if (!ctrl.signal.aborted) {
           if (data) setBufferData(data);
@@ -57,23 +66,30 @@ export default function RefPointChart() {
 
     return () => ctrl.abort();
   }, [
+    screened, state.layerMasks, state.customMaskPath, state.dataMode, state.datasetInfo,
     state.refBufferEnabled,
     state.showRefChart,
     chartDs,
     state.refMarkerPosition,
     state.refBufferRadius,
     fetchBufferTimeSeries,
-  ]);
+  ], REQUEST_GAP_MS);
 
+  const controls = <div className="chart-area-note">
+    <label><input type="checkbox" checked={screened}
+      onChange={e => setScreened(e.target.checked)} /> Apply current quality masks to preview</label>
+    <p>{screened ? 'Quality-screened diagnostic' : 'Raw-source diagnostic'}.
+      {' '}This does not change the map reference or exported values and does not prove stable ground.</p>
+  </div>;
   if (!state.refBufferEnabled || !state.showRefChart) return null;
   if (loading) {
     return (
       <div ref={panelRef} className="profile-panel" style={panelStyle} onMouseDown={e => e.stopPropagation()}>
-        <div className="chart-placeholder"><p>Loading reference buffer…</p></div>
+        {controls}<div className="chart-placeholder"><p>Loading reference buffer…</p></div>
       </div>
     );
   }
-  if (error) return <div ref={panelRef} className="profile-panel" style={panelStyle} role="alert" onMouseDown={e => e.stopPropagation()}>{error}</div>;
+  if (error) return <div ref={panelRef} className="profile-panel" style={panelStyle} role="alert" onMouseDown={e => e.stopPropagation()}>{controls}{error}</div>;
   if (!bufferData || bufferData.labels.length === 0) return null;
 
   // Use dataset info x_values as the authoritative label source — identical to
@@ -213,6 +229,7 @@ export default function RefPointChart() {
 
   return (
     <div ref={panelRef} className="profile-panel" style={panelStyle} onMouseDown={e => e.stopPropagation()}>
+      {controls}
       <div className="chart-header" onMouseDown={onDragMouseDown} style={{ cursor: 'grab' }}>
         <h4>
           Ref Buffer — {bufferData.n_pixels} px, r={state.refBufferRadius} m
