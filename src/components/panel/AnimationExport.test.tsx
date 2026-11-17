@@ -98,13 +98,20 @@ describe('raster GIF export controls', () => {
     await waitFor(() => expect((button() as HTMLButtonElement).disabled).toBe(true));
     expect(screen.getByText(/Rewrap off/)).toBeTruthy();
   });
-  it.each(['uploaded', 'configured'])('rejects unsupported %s masks without sending an export', async (kind) => {
+  it.each(['uploaded', 'configured'])('forwards %s masks through preflight and export', async (kind) => {
     if (kind === 'uploaded') state.customMaskPath = 'mask.tif';
-    else { state.dataMode = 'cog'; state.datasetInfo!.displacement.mask_file_list = ['mask.tif']; }
+    else { state.dataMode = 'cog'; state.datasetInfo!.displacement.mask_file_list = ['mask.tif']; state.datasetInfo!.displacement.mask_min_value = 0; }
     render(<AnimationExport />);
-    await waitFor(() => expect(screen.getByText(/Uploaded\/configured GeoTIFF masks/)).toBeTruthy());
-    expect((button() as HTMLButtonElement).disabled).toBe(true);
-    expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+    await waitFor(() => expect((button() as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(button());
+    await waitFor(() => expect(saveFile).toHaveBeenCalled());
+    const posts = vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === 'POST');
+    expect(posts.length).toBeGreaterThanOrEqual(2);
+    for (const [, init] of posts) {
+      const body = JSON.parse(String(init!.body));
+      if (kind === 'uploaded') expect(body.custom_mask_path).toBe('mask.tif');
+      else expect(body.mask_min_value).toBe(0);
+    }
   });
   it('requires increasing finite color limits', async () => {
     state.vmax = state.vmin;

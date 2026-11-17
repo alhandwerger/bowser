@@ -8,8 +8,13 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Optional raster GIF backgrounds with opacity, source attribution and text
+  annotations in Leaflet and MapLibre. Backgrounds are bounded display snapshots;
+  configured/uploaded masks apply with bounded reads and explicit failure handling.
+- Publish the initial Leaflet viewport immediately for cropped exports.
 - Configured and uploaded masks in full-server polygon summaries, with native
   bounded reads, explicit support records and no unmasked fallback.
+
 - Optional bounded vector outlines in raster GIFs, including polygon holes.
   Geometry-only annotations leave measurements, masks and native point histories
   unchanged. See [docs/raster-animation.md](docs/raster-animation.md).
