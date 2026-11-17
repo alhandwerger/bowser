@@ -10,6 +10,9 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Configured and uploaded masks in full-server polygon summaries, with native
   bounded reads, explicit support records and no unmasked fallback.
+- Optional bounded vector outlines in raster GIFs, including polygon holes.
+  Geometry-only annotations leave measurements, masks and native point histories
+  unchanged. See [docs/raster-animation.md](docs/raster-animation.md).
 
 - Configured and uploaded masks in full-server point/radius chart requests,
   including bounded native reads, per-layer configured thresholds and clear
